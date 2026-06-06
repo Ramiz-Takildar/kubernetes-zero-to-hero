@@ -1,0 +1,28 @@
+# Lab 1.4: Controller Manager in Action
+# This ReplicaSet demonstrates self-healing behavior
+
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: controller-demo
+  labels:
+    lab: controller-test
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: controller-demo
+  template:
+    metadata:
+      labels:
+        app: controller-demo
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"

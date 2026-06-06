@@ -1,0 +1,20 @@
+# Lab 2.4 Part A: Guaranteed QoS Pod
+# Request equals Limit = Guaranteed
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: guaranteed-qos
+  labels:
+    qos: guaranteed
+spec:
+  containers:
+  - name: nginx
+    image: nginx:alpine
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "128Mi"  # Equal to request
+        cpu: "100m"       # Equal to request

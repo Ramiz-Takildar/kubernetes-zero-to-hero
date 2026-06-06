@@ -1,494 +1,492 @@
 # Chapter 2 Labs: Pods & Containers
 
-## Lab 2.1: Production Multi-Container Pod
+## Overview
 
-### Objective
-Deploy a production-grade web application with logging sidecar.
+These labs cover Pod fundamentals, multi-container patterns, init containers, and resource management. Each lab includes detailed explanations, step-by-step instructions, and verification steps.
 
-### Production YAML
+**Prerequisites:** kubectl configured, basic cluster access
+
+---
+
+## Lab 2.1: Create and Debug Your First Pod
+
+### Learning Objectives
+- Create a Pod using kubectl
+- Access Pod logs and execute commands
+- Debug common Pod issues
+
+### Theory
+
+A Pod is the smallest deployable unit in Kubernetes. It encapsulates one or more containers with shared storage and network resources.
+
+**Key concepts:**
+- Pod gets its own IP address
+- Containers in a Pod share the IP
+- Pod lifecycle is tracked through phases
+
+### Steps
+
+#### Step 1: Create Your First Pod
+
+```bash
+kubectl run my-first-pod --image=nginx:alpine --port=80
+```
+
+This creates a Pod named `my-first-pod` running nginx on port 80.
+
+#### Step 2: Check Pod Status
+
+```bash
+kubectl get pod my-first-pod
+```
+
+**Expected output:**
+```
+NAME           READY   STATUS    RESTARTS   AGE
+my-first-pod   1/1     Running   0          10s
+```
+
+**Status meanings:**
+- `Pending`: Creating/starting
+- `Running`: Container running
+- `CrashLoopBackOff`: Container crashing
+- `Error`: Failed to start
+
+#### Step 3: Get Detailed Information
+
+```bash
+kubectl describe pod my-first-pod
+```
+
+**Important sections:**
+- `Events`: Shows lifecycle events
+- `Containers`: Container details
+- `Conditions`: Ready status
+- `QoS Class`: Resource class
+
+#### Step 4: Access the Pod Locally
+
+```bash
+# Start port forwarding in background
+kubectl port-forward my-first-pod 8080:80 &
+
+# Test access
+curl http://localhost:8080
+
+# Stop port forwarding
+kill %1
+```
+
+You should see the nginx welcome page.
+
+#### Step 5: Execute Commands in the Pod
+
+```bash
+# Run a single command
+kubectl exec my-first-pod -- ps aux
+
+# Open an interactive shell
+kubectl exec -it my-first-pod -- sh
+
+# Inside the container:
+ls -la /usr/share/nginx/html
+exit
+```
+
+#### Step 6: View Pod Logs
+
+```bash
+# View logs
+kubectl logs my-first-pod
+
+# Follow logs in real-time
+kubectl logs -f my-first-pod
+
+# Press Ctrl+C to stop following
+```
+
+You should see nginx access logs showing your curl request.
+
+#### Step 7: Copy Files
+
+```bash
+# Copy from pod to local
+kubectl cp my-first-pod:/etc/nginx/nginx.conf ./nginx.conf
+
+# Verify
+ls -lh nginx.conf
+cat nginx.conf
+```
+
+### Cleanup
+
+```bash
+kubectl delete pod my-first-pod
+rm -f nginx.conf
+```
+
+---
+
+## Lab 2.2: Multi-Container Pod with Shared Volume
+
+### Learning Objectives
+- Create a Pod with multiple containers
+- Share data between containers using volumes
+- Understand sidecar pattern
+
+### Theory
+
+**Sidecar Pattern:** A secondary container that extends or enhances the main application container.
+
+**Why multiple containers in one Pod:**
+- Shared storage (logs, cache)
+- Shared network (localhost communication)
+- Shared lifecycle (created/destroyed together)
+
+**emptyDir volume:** Created when Pod starts, deleted when Pod dies. Perfect for sharing temp files.
+
+### Steps
+
+#### Step 1: Create the Multi-Container Pod
+
+Create file `multi-container-pod.yaml`:
+
 ```yaml
-# production-web-pod.yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: production-web
+  name: multi-container-lab
   labels:
-    app: web
-    tier: frontend
-    version: v1.0.0
-  annotations:
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "9113"
+    lab: multi-container
 spec:
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 101
-    runAsGroup: 101
-    fsGroup: 101
-    seccompProfile:
-      type: RuntimeDefault
+  volumes:
+  - name: shared-storage
+    emptyDir: {}
   
   containers:
-  # Main Application Container
-  - name: nginx
-    image: nginx:1.25-alpine
-    ports:
-    - name: http
-      containerPort: 8080
-      protocol: TCP
-    
-    resources:
-      requests:
-        memory: "128Mi"
-        cpu: "100m"
-      limits:
-        memory: "256Mi"
-        cpu: "500m"
-    
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop:
-        - ALL
-    
-    volumeMounts:
-    - name: tmp
-      mountPath: /tmp
-    - name: cache
-      mountPath: /var/cache/nginx
-    - name: run
-      mountPath: /var/run
-    - name: nginx-config
-      mountPath: /etc/nginx/nginx.conf
-      subPath: nginx.conf
-      readOnly: true
-    - name: shared-logs
-      mountPath: /var/log/nginx
-    
-    livenessProbe:
-      httpGet:
-        path: /healthz
-        port: http
-      initialDelaySeconds: 10
-      periodSeconds: 10
-      timeoutSeconds: 5
-      failureThreshold: 3
-    
-    readinessProbe:
-      httpGet:
-        path: /ready
-        port: http
-      initialDelaySeconds: 5
-      periodSeconds: 5
-      timeoutSeconds: 3
-      failureThreshold: 2
-    
-    startupProbe:
-      httpGet:
-        path: /healthz
-        port: http
-      initialDelaySeconds: 5
-      periodSeconds: 5
-      timeoutSeconds: 3
-      failureThreshold: 30
-  
-  # Log Shipper Sidecar
-  - name: log-shipper
-    image: fluent/fluent-bit:2.2
-    args:
+  # Writer container creates log entries
+  - name: writer
+    image: busybox
+    command:
+    - /bin/sh
     - -c
-    - /fluent-bit/etc/fluent-bit.conf
-    resources:
-      requests:
-        memory: "64Mi"
-        cpu: "50m"
-      limits:
-        memory: "128Mi"
-        cpu: "100m"
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop:
-        - ALL
+    - |
+      echo "Writer starting..."
+      i=1
+      while true; do
+        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "[$timestamp] Log entry $i" >> /shared/output.txt
+        echo "Writer: Created entry $i"
+        i=$((i + 1))
+        sleep 5
+      done
     volumeMounts:
-    - name: shared-logs
-      mountPath: /var/log/nginx
-      readOnly: true
-    - name: fluent-bit-config
-      mountPath: /fluent-bit/etc
-      readOnly: true
-  
-  # Metrics Exporter Sidecar
-  - name: nginx-exporter
-    image: nginx/nginx-prometheus-exporter:1.0
-    args:
-    - -nginx.scrape-uri=http://localhost:8080/stub_status
-    ports:
-    - name: metrics
-      containerPort: 9113
+    - name: shared-storage
+      mountPath: /shared
     resources:
       requests:
         memory: "32Mi"
-        cpu: "25m"
-      limits:
-        memory: "64Mi"
         cpu: "50m"
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop:
-        - ALL
   
-  volumes:
-  - name: tmp
-    emptyDir: {}
-  - name: cache
-    emptyDir: {}
-  - name: run
-    emptyDir: {}
-  - name: shared-logs
-    emptyDir: {}
-  - name: nginx-config
-    configMap:
-      name: nginx-config
-  - name: fluent-bit-config
-    configMap:
-      name: fluent-bit-config
-  
-  restartPolicy: Always
-  terminationGracePeriodSeconds: 60
-  dnsPolicy: ClusterFirst
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-config
-data:
-  nginx.conf: |
-    user nginx;
-    worker_processes auto;
-    error_log /var/log/nginx/error.log warn;
-    pid /var/run/nginx.pid;
-    
-    events {
-        worker_connections 1024;
-    }
-    
-    http {
-        include /etc/nginx/mime.types;
-        default_type application/octet-stream;
-        
-        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                        '$status $body_bytes_sent "$http_referer" '
-                        '"$http_user_agent" "$http_x_forwarded_for"';
-        
-        access_log /var/log/nginx/access.log main;
-        
-        server {
-            listen 8080;
-            server_name localhost;
-            
-            location / {
-                root /usr/share/nginx/html;
-                index index.html;
-            }
-            
-            location /healthz {
-                access_log off;
-                return 200 "healthy\n";
-                add_header Content-Type text/plain;
-            }
-            
-            location /ready {
-                access_log off;
-                return 200 "ready\n";
-                add_header Content-Type text/plain;
-            }
-            
-            location /stub_status {
-                stub_status;
-                allow 127.0.0.1;
-                deny all;
-            }
-        }
-    }
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: fluent-bit-config
-data:
-  fluent-bit.conf: |
-    [INPUT]
-        Name tail
-        Path /var/log/nginx/access.log
-        Tag nginx.access
-        Parser nginx
-    
-    [INPUT]
-        Name tail
-        Path /var/log/nginx/error.log
-        Tag nginx.error
-        Parser nginx
-    
-    [OUTPUT]
-        Name stdout
-        Match *
-        Format json_lines
+  # Reader container reads log entries
+  - name: reader
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Reader starting..."
+      echo "Waiting for file to appear..."
+      sleep 2
+      echo "Reading from shared volume:"
+      tail -f /shared/output.txt
+    volumeMounts:
+    - name: shared-storage
+      mountPath: /shared
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"
 ```
 
-### Verification
+Apply it:
 ```bash
-kubectl apply -f production-web-pod.yaml
+kubectl apply -f multi-container-pod.yaml
+```
 
-# Check all 3 containers running
-kubectl get pod production-web
+#### Step 2: Verify Both Containers Running
 
-# Check container logs individually
-kubectl logs production-web -c nginx
-kubectl logs production-web -c log-shipper
-kubectl logs production-web -c nginx-exporter
+```bash
+kubectl get pod multi-container-lab
+```
 
-# Check metrics endpoint
-kubectl port-forward pod/production-web 9113:9113 &
-curl http://localhost:9113/metrics
-kill %1
+**Expected output:**
+```
+NAME                  READY   STATUS    RESTARTS   AGE
+multi-container-lab   2/2     Running   0          10s
+```
 
-# Cleanup
-kubectl delete -f production-web-pod.yaml
+Note: `2/2` means both containers are running.
+
+#### Step 3: View Writer Container Logs
+
+```bash
+kubectl logs multi-container-lab -c writer
+```
+
+You should see log entries being created.
+
+#### Step 4: View Reader Container Logs
+
+```bash
+kubectl logs multi-container-lab -c reader
+```
+
+You should see the log entries being read from the shared file.
+
+#### Step 5: Execute into Reader Container
+
+```bash
+kubectl exec -it multi-container-lab -c reader -- sh
+
+# Inside the container:
+cat /shared/output.txt
+ls -la /shared/
+exit
+```
+
+This confirms both containers can read/write the same files.
+
+#### Step 6: Copy Shared File
+
+```bash
+kubectl cp multi-container-lab:/shared/output.txt ./output.txt -c reader
+cat output.txt
+```
+
+### Verification Checklist
+
+- [ ] Pod shows `2/2` READY
+- [ ] Writer logs show entries being created
+- [ ] Reader logs show entries being read
+- [ ] File copy succeeds showing shared data
+
+### Cleanup
+
+```bash
+kubectl delete -f multi-container-pod.yaml
+rm -f multi-container-pod.yaml output.txt
 ```
 
 ---
 
-## Lab 2.2: Database Migration with Init Containers
+## Lab 2.3: Init Containers
 
-### Objective
-Deploy database with schema migration using init containers.
+### Learning Objectives
+- Understand init container execution order
+- Use init containers for setup tasks
+- Observe the blocking behavior
 
-### Production YAML
-```yaml
-# database-with-migration.yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: postgres
-  labels:
-    app: postgres
-    version: "15"
-spec:
-  serviceName: postgres-headless
-  replicas: 1
-  selector:
-    matchLabels:
-      app: postgres
-  template:
-    metadata:
-      labels:
-        app: postgres
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
-      
-      initContainers:
-      # Init Container 1: Wait for storage
-      - name: storage-init
-        image: busybox:1.36
-        command:
-        - sh
-        - -c
-        - |
-          echo "Checking data directory..."
-          if [ ! -d /var/lib/postgresql/data ]; then
-            echo "Creating data directory"
-            mkdir -p /var/lib/postgresql/data
-            chown 999:999 /var/lib/postgresql/data
-          fi
-          ls -la /var/lib/postgresql/
-        volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql
-        securityContext:
-          runAsUser: 0
-        resources:
-          requests:
-            memory: "32Mi"
-            cpu: "50m"
-      
-      # Init Container 2: Run migrations
-      - name: db-migrations
-        image: postgres:15-alpine
-        env:
-        - name: PGHOST
-          value: localhost
-        - name: PGUSER
-          valueFrom:
-            secretKeyRef:
-              name: postgres-secret
-              key: username
-        - name: PGPASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgres-secret
-              key: password
-        - name: PGDATABASE
-          value: appdb
-        command:
-        - sh
-        - -c
-        - |
-          echo "Running database migrations..."
-          # Wait for postgres to be ready
-          until pg_isready -q; do
-            echo "Waiting for postgres..."
-            sleep 2
-          done
-          
-          echo "Creating schema if not exists..."
-          psql -c "CREATE SCHEMA IF NOT EXISTS migrations;"
-          
-          echo "Migration complete"
-        volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "100m"
-      
-      containers:
-      - name: postgres
-        image: postgres:15-alpine
-        env:
-        - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: postgres-secret
-              key: username
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgres-secret
-              key: password
-        - name: POSTGRES_DB
-          value: appdb
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
-        ports:
-        - name: postgres
-          containerPort: 5432
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          exec:
-            command:
-            - pg_isready
-            - -U
-            - postgres
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-        readinessProbe:
-          exec:
-            command:
-            - pg_isready
-            - -U
-            - postgres
-          initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 3
-        volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
-        - name: postgres-config
-          mountPath: /etc/postgresql/postgresql.conf
-          subPath: postgresql.conf
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: false
-      
-      volumes:
-      - name: postgres-config
-        configMap:
-          name: postgres-config
-  
-  volumeClaimTemplates:
-  - metadata:
-      name: postgres-data
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      storageClassName: standard
-      resources:
-        requests:
-          storage: 10Gi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres-headless
-spec:
-  clusterIP: None
-  selector:
-    app: postgres
-  ports:
-  - port: 5432
-    name: postgres
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: postgres-config
-data:
-  postgresql.conf: |
-    listen_addresses = '*'
-    max_connections = 100
-    shared_buffers = 256MB
-    effective_cache_size = 768MB
-    maintenance_work_mem = 64MB
-    checkpoint_completion_target = 0.9
-    wal_buffers = 7864kB
-    default_statistics_target = 100
-    random_page_cost = 1.1
-    effective_io_concurrency = 200
-    work_mem = 1310kB
-    min_wal_size = 1GB
-    max_wal_size = 4GB
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-secret
-type: Opaque
-data:
-  username: cG9zdGdyZXM=  # postgres
-  password: c2VjcmV0MTIz  # secret123
+### Theory
+
+**Init Containers:**
+- Run before main containers start
+- Execute sequentially (not parallel)
+- Must all succeed before main containers start
+- Often used for: setup, waiting for dependencies, migrations
+
+**Execution flow:**
+```
+Pod Created
+    ↓
+Init Container 1 runs
+    ↓
+Init Container 1 completes
+    ↓
+Init Container 2 runs
+    ↓
+Init Container 2 completes
+    ↓
+Main Containers start (parallel)
 ```
 
----
+### Steps
 
-## Lab 2.3: Resource Management Lab
+#### Step 1: Create Pod with Init Containers
 
-### Objective
-Understand resource constraints with production workloads.
+Create `init-container-pod.yaml`:
 
-### Production YAML
 ```yaml
-# resource-management-lab.yaml
-# Guaranteed QoS Pod
 apiVersion: v1
 kind: Pod
 metadata:
-  name: guaranteed-pod
+  name: init-lab
+  labels:
+    lab: init-container
+spec:
+  initContainers:
+  # Init 1: Simulates checking database availability
+  - name: init-check-db
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "[Init 1] Checking database connection..."
+      echo "[Init 1] Simulating database check..."
+      sleep 3
+      echo "[Init 1] Database is available!"
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+  
+  # Init 2: Simulates running migrations
+  - name: init-migrations
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "[Init 2] Running database migrations..."
+      sleep 3
+      echo "[Init 2] Migration 1/3 complete"
+      sleep 2
+      echo "[Init 2] Migration 2/3 complete"
+      sleep 2
+      echo "[Init 2] Migration 3/3 complete"
+      echo "[Init 2] All migrations done!"
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"
+  
+  # Init 3: Simulates setting permissions
+  - name: init-permissions
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "[Init 3] Setting up directory permissions..."
+      mkdir -p /shared/data
+      echo "[Init 3] Created /shared/data"
+      echo "[Init 3] Permissions set!"
+    volumeMounts:
+    - name: data-volume
+      mountPath: /shared
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+  
+  # Main container only starts after all init containers complete
+  containers:
+  - name: main-app
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: data-volume
+      mountPath: /usr/share/nginx/html/data
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+  
+  volumes:
+  - name: data-volume
+    emptyDir: {}
+```
+
+Apply it:
+```bash
+kubectl apply -f init-container-pod.yaml
+```
+
+#### Step 2: Watch Init Container Execution
+
+```bash
+# Watch Pod status change
+kubectl get pod init-lab -w
+```
+
+**Expected progression:**
+1. `Init:0/3` (Pending)
+2. `Init:1/3` (First init container running)
+3. `Init:2/3` (Second init container running)
+4. `Init:3/3` (Third init container running)
+5. `Running` (Main container started)
+
+Press `Ctrl+C` when status shows `Running`.
+
+#### Step 3: Check Init Container Logs
+
+```bash
+# First init container
+kubectl logs init-lab -c init-check-db
+
+# Second init container
+kubectl logs init-lab -c init-migrations
+
+# Third init container
+kubectl logs init-lab -c init-permissions
+```
+
+Each should show completion messages.
+
+#### Step 4: Verify Main Container
+
+```bash
+kubectl logs init-lab
+```
+
+Main container (nginx) logs should show it started successfully.
+
+### Verification Checklist
+
+- [ ] Pod went through Init:0/3 → Init:3/3 → Running
+- [ ] Init container 1 logs show completion
+- [ ] Init container 2 logs show all migrations
+- [ ] Init container 3 logs show permissions set
+- [ ] Main container started after all init complete
+
+### Cleanup
+
+```bash
+kubectl delete -f init-container-pod.yaml
+rm -f init-container-pod.yaml
+```
+
+---
+
+## Lab 2.4: Resource Management and QoS
+
+### Learning Objectives
+- Configure resource requests and limits
+- Understand QoS classes
+- Observe OOMKilled behavior
+
+### Theory
+
+**Requests vs Limits:**
+- **Requests:** Guaranteed resources, used for scheduling
+- **Limits:** Maximum allowed, enforced at runtime
+
+**QoS Classes:**
+- **Guaranteed:** Request = Limit (best protection)
+- **Burstable:** Request < Limit
+- **BestEffort:** No requests/limits (first evicted)
+
+### Part A: Guaranteed QoS
+
+Create `guaranteed-pod.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: guaranteed-qos
   labels:
     qos: guaranteed
 spec:
@@ -500,18 +498,25 @@ spec:
         memory: "128Mi"
         cpu: "100m"
       limits:
-        memory: "128Mi"
-        cpu: "100m"
-    livenessProbe:
-      httpGet:
-        path: /
-        port: 80
----
-# Burstable QoS Pod
+        memory: "128Mi"  # Equal to request
+        cpu: "100m"       # Equal to request
+```
+
+```bash
+kubectl apply -f guaranteed-pod.yaml
+kubectl get pod guaranteed-qos -o jsonpath='{.status.qosClass}'
+# Output: Guaranteed
+```
+
+### Part B: Burstable QoS
+
+Create `burstable-pod.yaml`:
+
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: burstable-pod
+  name: burstable-qos
   labels:
     qos: burstable
 spec:
@@ -523,34 +528,90 @@ spec:
         memory: "64Mi"
         cpu: "50m"
       limits:
-        memory: "128Mi"
+        memory: "128Mi"  # Higher than request
         cpu: "100m"
----
-# BestEffort QoS Pod
+```
+
+```bash
+kubectl apply -f burstable-pod.yaml
+kubectl get pod burstable-qos -o jsonpath='{.status.qosClass}'
+# Output: Burstable
+```
+
+### Part C: BestEffort QoS
+
+Create `besteffort-pod.yaml`:
+
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: besteffort-pod
+  name: besteffort-qos
   labels:
     qos: besteffort
 spec:
   containers:
   - name: nginx
     image: nginx:alpine
----
+    # No resources section = BestEffort
 ```
 
-### Verification
 ```bash
-kubectl apply -f resource-management-lab.yaml
+kubectl apply -f besteffort-pod.yaml
+kubectl get pod besteffort-qos -o jsonpath='{.status.qosClass}'
+# Output: BestEffort
+```
 
-# Check assigned QoS
-kubectl get pod guaranteed-pod -o jsonpath='{.status.qosClass}'
-kubectl get pod burstable-pod -o jsonpath='{.status.qosClass}'
-kubectl get pod besteffort-pod -o jsonpath='{.status.qosClass}'
+### Part D: Demonstrate OOMKilled
 
-# Describe to see resource allocation
-kubectl describe pod guaranteed-pod | grep -A2 "QoS"
+Create `oom-test-pod.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oom-test
+spec:
+  containers:
+  - name: memory-eater
+    image: polinux/stress
+    command:
+    - stress
+    - --vm
+    - "1"
+    - --vm-bytes
+    - "250M"  # Tries to allocate 250MB
+    - --vm-hang
+    - "1"
+    resources:
+      limits:
+        memory: "128Mi"  # But limited to 128MB
+```
+
+```bash
+kubectl apply -f oom-test-pod.yaml
+sleep 10
+kubectl get pod oom-test
+kubectl describe pod oom-test | grep -A5 "Last State"
+```
+
+**Expected:** Pod shows `OOMKilled` with exit code 137.
+
+### Verification Checklist
+
+- [ ] Guaranteed QoS verified
+- [ ] Burstable QoS verified
+- [ ] BestEffort QoS verified
+- [ ] OOMKilled observed
+
+### Cleanup
+
+```bash
+kubectl delete -f guaranteed-pod.yaml
+kubectl delete -f burstable-pod.yaml
+kubectl delete -f besteffort-pod.yaml
+kubectl delete -f oom-test-pod.yaml
+rm -f *-pod.yaml
 ```
 
 ---
@@ -559,6 +620,9 @@ kubectl describe pod guaranteed-pod | grep -A2 "QoS"
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 2.1 | Production Multi-Container Pod | [ ] |
-| 2.2 | Database Migration with Init | [ ] |
-| 2.3 | Resource Management | [ ] |
+| 2.1 | Create and debug first pod | [ ] |
+| 2.2 | Multi-container pod | [ ] |
+| 2.3 | Init containers | [ ] |
+| 2.4 | Resource management | [ ] |
+
+**Mark complete in [CHECKLIST.md](../CHECKLIST.md)**

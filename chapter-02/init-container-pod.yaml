@@ -1,0 +1,83 @@
+# Lab 2.3: Init Containers
+# Demonstrates sequential execution before main container
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-lab
+  labels:
+    lab: init-container
+spec:
+  initContainers:
+  # Init 1: Simulates checking database availability
+  - name: init-check-db
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "[Init 1] Checking database connection..."
+      echo "[Init 1] Simulating database check..."
+      sleep 3
+      echo "[Init 1] Database is available!"
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+  
+  # Init 2: Simulates running migrations
+  - name: init-migrations
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "[Init 2] Running database migrations..."
+      sleep 3
+      echo "[Init 2] Migration 1/3 complete"
+      sleep 2
+      echo "[Init 2] Migration 2/3 complete"
+      sleep 2
+      echo "[Init 2] Migration 3/3 complete"
+      echo "[Init 2] All migrations done!"
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"
+  
+  # Init 3: Simulates setting permissions
+  - name: init-permissions
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "[Init 3] Setting up directory permissions..."
+      mkdir -p /shared/data
+      echo "[Init 3] Created /shared/data"
+      echo "[Init 3] Permissions set!"
+    volumeMounts:
+    - name: data-volume
+      mountPath: /shared
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+  
+  # Main container only starts after all init containers complete
+  containers:
+  - name: main-app
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: data-volume
+      mountPath: /usr/share/nginx/html/data
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+  
+  volumes:
+  - name: data-volume
+    emptyDir: {}

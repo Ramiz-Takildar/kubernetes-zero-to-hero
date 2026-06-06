@@ -1,0 +1,59 @@
+# Lab 2.2: Multi-Container Pod with Shared Volume
+# This demonstrates the sidecar pattern with shared storage
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-container-lab
+  labels:
+    lab: multi-container
+spec:
+  volumes:
+  # Shared volume for both containers
+  - name: shared-storage
+    emptyDir: {}
+  
+  containers:
+  # Writer container creates log entries
+  - name: writer
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Writer starting..."
+      i=1
+      while true; do
+        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "[$timestamp] Log entry $i" >> /shared/output.txt
+        echo "Writer: Created entry $i"
+        i=$((i + 1))
+        sleep 5
+      done
+    volumeMounts:
+    - name: shared-storage
+      mountPath: /shared
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"
+  
+  # Reader container reads log entries
+  - name: reader
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Reader starting..."
+      echo "Waiting for file to appear..."
+      sleep 2
+      echo "Reading from shared volume:"
+      tail -f /shared/output.txt
+    volumeMounts:
+    - name: shared-storage
+      mountPath: /shared
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"

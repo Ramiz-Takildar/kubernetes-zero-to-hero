@@ -1,0 +1,14 @@
+# Lab 2.4 Part C: BestEffort QoS Pod
+# No resources defined = BestEffort
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: besteffort-qos
+  labels:
+    qos: besteffort
+spec:
+  containers:
+  - name: nginx
+    image: nginx:alpine
+    # No resources section = BestEffort

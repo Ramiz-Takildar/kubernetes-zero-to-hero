@@ -1,0 +1,18 @@
+# Lab 1.5: Scheduler Node Selection
+# This pod uses nodeSelector to constrain scheduling
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: scheduled-pod
+spec:
+  nodeSelector:
+    kubernetes.io/os: linux
+  containers:
+  - name: app
+    image: busybox
+    command: ['sleep', '3600']
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"

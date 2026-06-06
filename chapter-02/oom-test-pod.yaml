@@ -1,0 +1,22 @@
+# Lab 2.4 Part D: OOMKilled Demonstration
+# Container tries to use more memory than limit
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oom-test
+spec:
+  containers:
+  - name: memory-eater
+    image: polinux/stress
+    command:
+    - stress
+    - --vm
+    - "1"
+    - --vm-bytes
+    - "250M"  # Tries to allocate 250MB
+    - --vm-hang
+    - "1"
+    resources:
+      limits:
+        memory: "128Mi"  # But limited to 128MB
