@@ -2,27 +2,53 @@
 
 > **Goal:** Crack any Kubernetes interview from Junior to Senior/DevOps levels
 
-## 📋 Progress Tracking
+## 📋 Progress Tracking (One-Click Solution)
 
-Track your learning progress in multiple formats:
+### 🎯 Recommended: Interactive Web Tracker (EASIEST)
+
+Simply open `PROGRESS.html` in your browser - **No setup required!**
+
+```bash
+# Mac
+open PROGRESS.html
+
+# Linux
+xdg-open PROGRESS.html
+
+# Windows
+start PROGRESS.html
+```
+
+**Features:**
+- ✅ Click to mark items complete
+- ✅ Visual progress bars
+- ✅ Auto-saves to localStorage
+- ✅ Export/Import progress
+- ✅ Works offline
+- ✅ Mobile-friendly
+
+### Alternatives
 
 | Format | File | Best For |
 |--------|------|----------|
+| **Interactive Web** | [PROGRESS.html](./PROGRESS.html) | ⭐ Easiest - Just click! |
+| Makefile | [Makefile](./Makefile) | Command line (`make status`) |
 | Markdown | [PROGRESS.md](./PROGRESS.md) | Reading and editing |
 | CSV | [PROGRESS.csv](./PROGRESS.csv) | Excel/Google Sheets |
 | JSON | [PROGRESS.json](./PROGRESS.json) | Apps and automation |
 | Script | [progress.sh](./progress.sh) | Command-line tracking |
 
-### Quick Progress Check
+### Quick Commands
 
 ```bash
-# View status summary
+# Using Makefile (easiest command-line)
+make status           # Show progress
+make start CH=1       # Start Chapter 1
+make complete CH=1    # Complete Chapter 1
+make next             # What to do next
+
+# Or using script
 ./progress.sh status
-
-# List incomplete items
-./progress.sh list
-
-# Mark chapter 1 theory complete
 ./progress.sh mark 1 theory
 ```
 
