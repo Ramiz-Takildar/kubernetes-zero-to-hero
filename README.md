@@ -4,7 +4,27 @@
 
 ## 📋 Progress Tracking
 
-Track your completion status in **[CHECKLIST.md](./CHECKLIST.md)**
+Track your learning progress in multiple formats:
+
+| Format | File | Best For |
+|--------|------|----------|
+| Markdown | [PROGRESS.md](./PROGRESS.md) | Reading and editing |
+| CSV | [PROGRESS.csv](./PROGRESS.csv) | Excel/Google Sheets |
+| JSON | [PROGRESS.json](./PROGRESS.json) | Apps and automation |
+| Script | [progress.sh](./progress.sh) | Command-line tracking |
+
+### Quick Progress Check
+
+```bash
+# View status summary
+./progress.sh status
+
+# List incomplete items
+./progress.sh list
+
+# Mark chapter 1 theory complete
+./progress.sh mark 1 theory
+```
 
 | Status | Meaning |
 |--------|---------|
@@ -102,7 +122,11 @@ Communication Skills (10%)
 
 ## 🔗 Quick Links
 
-- [Progress Tracker](./CHECKLIST.md)
+- [Progress Tracker](./PROGRESS.md) - Multiple formats available:
+  - [PROGRESS.md](./PROGRESS.md) - Human-readable markdown
+  - [PROGRESS.csv](./PROGRESS.csv) - Spreadsheet compatible
+  - [PROGRESS.json](./PROGRESS.json) - Machine-readable
+  - [progress.sh](./progress.sh) - Command-line tool
 - [Top 50 Questions Quick Reference](./chapter-10/50-interview-questions.md)
 - [Scenario-Based Questions](./chapter-10/scenario-questions.md)
 - [Cheat Sheet](./cheat-sheet.md)

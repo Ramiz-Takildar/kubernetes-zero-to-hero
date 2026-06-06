@@ -1,0 +1,153 @@
+{
+  "metadata": {
+    "title": "Kubernetes Zero to Hero - Study Progress",
+    "total_chapters": 10,
+    "total_labs": 36,
+    "total_interview_questions": 210,
+    "last_updated": "2024-01-01",
+    "study_start_date": "2024-01-01",
+    "target_completion_date": "2024-02-15",
+    "target_interview_date": "2024-03-01"
+  },
+  "overall_progress": {
+    "completed": 0,
+    "in_progress": 0,
+    "not_started": 65,
+    "percentage": 0
+  },
+  "chapters": [
+    {
+      "chapter": 1,
+      "title": "Kubernetes Architecture",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 1.1 - Control Plane", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 1.2 - etcd Backup", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 1.3 - API Server", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 1.4 - Controller", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 1.5 - Scheduler", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 2,
+      "title": "Pods & Containers",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 2.1 - First Pod", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 2.2 - Multi-Container", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 2.3 - Init Containers", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 2.4 - Resource Mgmt", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 3,
+      "title": "Workloads & Controllers",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 3.1 - Rolling Update", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 3.2 - Blue-Green", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 3.3 - StatefulSet", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 3.4 - CronJob", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 4,
+      "title": "Services & Networking",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 4.1 - Service Discovery", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 4.2 - NodePort", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 4.3 - Ingress", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 4.4 - Network Policies", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 4.5 - DNS", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 5,
+      "title": "Storage",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 5.1 - Dynamic PVC", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 5.2 - StatefulSet Storage", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 5.3 - Snapshots", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 5.4 - StorageClass", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 6,
+      "title": "Configuration",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 6.1 - ConfigMaps", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 6.2 - Secrets", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 6.3 - Downward API", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 7,
+      "title": "Observability",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 7.1 - Liveness", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 7.2 - Readiness", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 7.3 - Debugging", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 8,
+      "title": "Scheduling & Scaling",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 8.1 - HPA", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 8.2 - Affinity", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 8.3 - Taints", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 8.4 - PDB", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 9,
+      "title": "Security",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 9.1 - RBAC", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 9.2 - Pod Security", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 9.3 - Network Policies", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    },
+    {
+      "chapter": 10,
+      "title": "Advanced Topics",
+      "status": "NOT_STARTED",
+      "sections": [
+        {"name": "Theory", "type": "read", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Interview Qs", "type": "practice", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 10.1 - CRD", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 10.2 - GitOps", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null},
+        {"name": "Lab 10.3 - Disaster Recovery", "type": "hands-on", "status": "NOT_STARTED", "completed_date": null}
+      ]
+    }
+  ],
+  "notes": {
+    "weak_areas": [],
+    "questions": [],
+    "additional_resources": []
+  }
+}
