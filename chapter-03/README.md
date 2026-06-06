@@ -3,366 +3,446 @@
 ## 📚 Learning Objectives
 
 By the end of this chapter, you will:
-- Understand all workload controllers
-- Perform rolling updates and rollbacks
-- Scale applications
-- Implement different deployment strategies
+- Master Deployments and their update strategies
+- Implement zero-downtime deployments (blue-green, canary)
+- Use StatefulSets for stateful applications
+- Schedule batch jobs and cron jobs
+- Configure DaemonSets for node-level services
+- Perform rollbacks and manage revision history
 
-**Estimated Time:** 3 days
-
----
-
-## 3.1 ReplicaSet
-
-Ensures a specified number of pod replicas are running.
-
-### Why Deployments are Preferred
-
-**Deployment** manages **ReplicaSet** which manages **Pods**
-
-```
-User
-  ↓
-Deployment (declarative updates)
-  ↓
-ReplicaSet (ensures replica count)
-  ↓
-Pods (actual workload)
-```
-
-**Rule of thumb:** Always use Deployments, never ReplicaSets directly.
+**Estimated Time:** 3 days  
+**Labs:** 4 hands-on exercises
 
 ---
 
-## 3.2 Deployment
+## 🎯 Deployments Explained
 
-**Manages declarative updates to applications**
+### What is a Deployment?
 
-### Deployment Strategies
+A Deployment provides **declarative updates** for Pods and ReplicaSets. You describe the **desired state** in a Deployment, and the Deployment Controller changes the **actual state** to match.
 
-| Strategy | How it Works | Use Case |
-|----------|--------------|----------|
-| **RollingUpdate** | Gradually replace pods | Default, zero downtime |
-| **Recreate** | Kill all, then create new | Maintenance windows |
+```
+┌─────────────────────────────────────────────┐
+│              Deployment                     │
+│          (Desired State)                    │
+│                                             │
+│  replicas: 5                                │
+│  image: nginx:1.25                          │
+│  strategy: RollingUpdate                    │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+           ┌──────────────┐
+           │   Controller │
+           │   Reconciles │
+           └──────┬───────┘
+                  │
+      ┌───────────┼───────────┐
+      ▼           ▼           ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│ReplicaSet│ │ReplicaSet│ │ReplicaSet│
+│ (v1.24)  │ │ (v1.25)  │ │ (v1.26)  │
+│          │ │          │ │          │
+│ Pod-1    │ │ Pod-1    │ │ Pod-1    │
+│ Pod-2    │ │ Pod-2    │ │ Pod-2    │
+│ Pod-3    │ │ Pod-3    │ │ Pod-3    │
+└──────────┘ └──────────┘ └──────────┘
+     ↑
+  Old revisions (kept for rollback)
+```
 
-### RollingUpdate Parameters
+### Deployment vs ReplicaSet
 
+| Aspect | ReplicaSet | Deployment |
+|--------|-----------|------------|
+| Purpose | Maintain pod count | Manage declarative updates |
+| Updates | Manual | Automated with strategy |
+| Rollback | Not supported | Built-in revision history |
+| Version tracking | None | Maintains revision history |
+| Use directly | No | Yes |
+
+**Golden Rule:** Always use Deployments, never ReplicaSets directly.
+
+---
+
+## 🔄 Update Strategies
+
+### Rolling Update (Default)
+
+Gradually replaces old pods with new ones.
+
+```
+Initial:          v1.24 running (5 pods)
+                      │
+                      ▼
+Step 1: Create 1 new pod (v1.25)
+        Scale: 5 old + 1 new = 6 total
+                      │
+                      ▼
+Step 2: Delete 1 old pod
+        Scale: 4 old + 1 new = 5 total
+                      │
+                      ▼
+Step 3: Create 1 new pod
+        Scale: 4 old + 2 new = 6 total
+                      │
+                      ▼
+Continue until: 5 new pods (v1.25)
+                0 old pods
+```
+
+**Configuration:**
 ```yaml
 strategy:
   type: RollingUpdate
   rollingUpdate:
-    maxUnavailable: 1    # Max pods DOWN during update
-    maxSurge: 1         # Max pods ABOVE desired during update
+    maxUnavailable: 1     # Max pods DOWN during update
+    maxSurge: 1          # Max pods ABOVE desired during update
 ```
 
-**Example scenario (5 replicas, maxUnavailable=1, maxSurge=1):**
-```
-Step 1: 5 old pods running
-Step 2: 1 new pod created (total: 5 old + 1 new = 6)
-Step 3: 1 old pod removed (total: 4 old + 1 new = 5)
-Step 4: Repeat until all pods are new
-```
+**Dual Strategy:**
+- `maxUnavailable: 0` → Ensure zero downtime (default behavior)
+- `maxSurge: 1` → Allow temporary extra pods
 
 ---
 
-## 3.3 Updates and Rollbacks
+### Recreate Strategy
 
-### Update Commands
+Kill all old pods, then create new ones.
 
-```bash
-# Update image
-kubectl set image deployment/myapp container=newimage:tag
-
-# Update replica count
-kubectl scale deployment/myapp --replicas=10
-
-# Edit live deployment
-kubectl edit deployment/myapp
-
-# Rolling restart
-kubectl rollout restart deployment/myapp
+```
+Step 1: Terminate all 5 old pods
+        Available: 0 pods
+        DOWNTIME!
+                  │
+                  ▼
+Step 2: Create 5 new pods
+        Available: 5 pods
 ```
 
-### Rollback Commands
-
-```bash
-# Check revision history
-kubectl rollout history deployment/myapp
-
-# Rollback to previous version
-kubectl rollout undo deployment/myapp
-
-# Rollback to specific revision
-kubectl rollout undo deployment/myapp --to-revision=2
-
-# Pause rollout
-kubectl rollout pause deployment/myapp
-
-# Resume rollout
-kubectl rollout resume deployment/myapp
-
-# Watch rollout status
-kubectl rollout status deployment/myapp
-```
+**Use case:** When pods cannot run simultaneously (database schema changes)
 
 ---
 
-## 3.4 Advanced Deployment Patterns
+## 🚦 Deployment Patterns
 
 ### Blue-Green Deployment
 
 ```
-Active (Blue)        Inactive (Green)
-┌──────────┐         ┌──────────┐
-│ v1.0     │ ←────── │ v2.0     │
-│ Running  │         │ Ready    │
-└──────────┘         └──────────┘
-        ↑
-   Users here
+┌─────────────────────────────────────────────┐
+│               Load Balancer                 │
+│                   (Service)                 │
+│                      │                      │
+│           ┌─────────┴─────────┐            │
+│           │                   │            │
+│           ▼                   ▼            │
+│   ┌──────────────┐   ┌──────────────┐      │
+│   │ Blue (Live)  │   │ Green (Idle) │      │
+│   │              │   │   (test)     │      │
+│   │  v1.0 Active │   │   v2.0 Ready │      │
+│   └──────────────┘   └──────────────┘      │
+│          ↑                                        │
+└──────────┬──────────────────────────────────┘
+           │
+    Users connected here
 ```
 
 **Process:**
-1. Deploy v2.0 alongside v1.0
-2. Test v2.0
-3. Switch Service selector to v2.0
-4. Rollback: switch back to v1.0
+1. Deploy v1.0 (Blue) - receiving traffic
+2. Deploy v2.0 (Green) - idle, test it
+3. Switch Service selector to Green
+4. Blue still exists for instant rollback
+
+**Advantages:**
+- Zero downtime
+- Instant rollback
+- Full testing before switch
+
+---
 
 ### Canary Deployment
 
 ```
-Service
-  ├── 90% → v1.0 Pods (Blue)
-  └── 10% → v2.0 Pods (Green)
+Load Balancer
+      │
+      ├─ 95% ──► v1.0 (Stable)
+      │
+      └─ 5%  ──► v2.0 (Canary)
+
+Monitor metrics:
+- Error rate < 1% ✓
+- Latency < 100ms ✓
+- Then gradually shift traffic:
+
+      ├─ 70% ──► v1.0
+      │
+      └─ 30% ──► v2.0
+
+Eventually:
+      │
+      └─ 100% ──► v2.0
 ```
 
-**Process:**
-1. Deploy small % of v2.0
-2. Monitor metrics
-3. Gradually increase v2.0 %
-4. Full rollout if successful
+**Benefits:**
+- Test with real production traffic
+- Limit blast radius of failures
+- Gradual rollout
+- Automatic rollback if issues
 
 ---
 
-## ❓ Interview Questions (20)
+## 📊 StatefulSets
 
-### Q1: What is the difference between Deployment and ReplicaSet?
+### Why StatefulSets?
 
-**Answer:**
+**Deployment limitations for stateful apps:**
+- Random pod names (hash-based)
+- Simultaneous scaling/deletion
+- Shared storage
+- No stable network identity
 
-| Aspect | Deployment | ReplicaSet |
-|--------|------------|------------|
-| **Purpose** | Manages updates | Maintains replica count |
-| **Updates** | Declarative, versioned | No native update strategy |
-| **Rollback** | Native support | Manual |
-| **History** | Revision history | None |
-| **Relationship** | Manages ReplicaSets | Managed by Deployment |
-| **Use** | Production apps | Rarely used directly |
+**StatefulSet solutions:**
+- Predictable pod names: `name-0, name-1, name-2`
+- Ordered operations (0, 1, 2...)
+- Each pod gets own PersistentVolume
+- Stable network identity via headless service
 
-Deployment is the higher-level abstraction you should use.
+### StatefulSet Pod Management
+
+```
+Creation Order:          Deletion Order:
+  name-0                    name-2
+    │   (wait for ready)     │
+    ▼                        ▼
+  name-1                    name-1
+    │   (wait for ready)     │
+    ▼                        ▼
+  name-2                    name-0
+         
+Sequential               Reverse Order
+OrderedReady             Parallel
+```
+
+**Headless Service for StatefulSet:**
+```
+Pod: db-0
+Access: db-0.db-headless.default.svc.cluster.local
+DNS resolves directly to Pod IP (no load balancing)
+```
+
+### Use Cases
+
+- Databases (MySQL, PostgreSQL, MongoDB)
+- Message queues (Kafka, RabbitMQ)
+- Distributed systems (ZooKeeper, etcd)
+- Search engines (Elasticsearch)
 
 ---
 
-### Q2: Explain RollingUpdate strategy
+## ⏰ Jobs and CronJobs
 
-**Answer:**
-Gradually replaces old pods with new ones for zero-downtime updates.
+### Job
 
-**Parameters:**
-- `maxUnavailable`: Max pods that can be unavailable during update
-- `maxSurge`: Max pods that can exist above desired count
+Runs a task to completion.
 
-**Example:** 10 replicas, maxUnavailable=2, maxSurge=2
-- Update starts
-- 2 new pods created (12 total)
-- 2 old pods removed (10 total)
-- Repeat until done
-- At least 8 pods always available
+```yaml
+apiVersion: batch/v1
+kind: Job
+spec:
+  completions: 10      # Need 10 successful completions
+  parallelism: 3       # Run 3 pods at a time
+  activeDeadlineSeconds: 600  # Fail if not done in 10 min
+```
+
+**Behavior:**
+- Creates pods until `completions` successful pods
+- Runs `parallelism` pods concurrently
+- Retries failed pods (up to `backoffLimit`)
+
+### CronJob
+
+Scheduled execution of Jobs.
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+spec:
+  schedule: "0 2 * * *"  # 2 AM daily
+  concurrencyPolicy: Forbid  # Don't start if previous still running
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: postgres:15
+            command: ['pg_dump', ...]
+          restartPolicy: OnFailure
+```
+
+**Scheduling Format (Cron):**
+```
+┌───────────── minute (0 - 59)
+│ ┌───────────── hour (0 - 23)
+│ │ ┌───────────── day of month (1 - 31)
+│ │ │ ┌───────────── month (1 - 12)
+│ │ │ │ ┌───────────── day of week (0 - 6)
+│ │ │ │ │
+│ │ │ │ │
+* * * * *
+
+Examples:
+0 2 * * *     # Daily at 2 AM
+*/5 * * * *   # Every 5 minutes
+0 0 * * 0     # Weekly on Sunday
+```
 
 ---
 
-### Q3: How do you rollback a deployment?
+## 👥 DaemonSet
 
-**Answer:**
+Ensures exactly one pod per node.
 
+```
+Cluster:
+┌────────────┐  ┌────────────┐  ┌────────────┐
+│   Node 1   │  │   Node 2   │  │   Node 3   │
+│            │  │            │  │            │
+│ ┌────────┐ │  │ ┌────────┐ │  │ ┌────────┐ │
+│ │Fluentd │ │  │ │Fluentd │ │  │ │Fluentd │ │
+│ │ (log)  │ │  │ │ (log)  │ │  │ │ (log)  │ │
+│ └────────┘ │  │ └────────┘ │  │ └────────┘ │
+└────────────┘  └────────────┘  └────────────┘
+
+One per node automatically
+```
+
+**Use Cases:**
+- Log collection (Fluentd, Filebeat)
+- Node monitoring (Prometheus node-exporter)
+- CNI plugins (Calico, Flannel)
+- Storage daemons
+
+**Deployment vs DaemonSet:**
+| Deployment | DaemonSet |
+|------------|-----------|
+| Specified replica count | One per node |
+| Any node | All nodes (or subset) |
+| User apps | Infrastructure |
+
+---
+
+## 🔄 Rollback
+
+```
+v1.0 deployed
+    │
+    ▼
+v1.1 deployed (broken)
+    │
+    ▼
+Rollback to v1.0
+    │
+    └─► Deployment Controller:
+        - Uses old ReplicaSet (v1.0)
+        - Scales down v1.1 ReplicaSet
+        - Scales up v1.0 ReplicaSet
+        - Updates Deployment revision
+```
+
+**Commands:**
 ```bash
-# View revision history
+# View revisions
 kubectl rollout history deployment/myapp
 
 # Rollback to previous
 kubectl rollout undo deployment/myapp
 
 # Rollback to specific revision
-kubectl rollout undo deployment/myapp --to-revision=3
-```
-
-**What happens:**
-- Creates new ReplicaSet with old pod spec
-- Scales down new ReplicaSet
-- Scales up old ReplicaSet
-- Updates Deployment resource
-
----
-
-### Q4: What is the difference between maxUnavailable and maxSurge?
-
-**Answer:**
-
-| Parameter | Controls | Effect |
-|-----------|----------|--------|
-| **maxUnavailable** | How many pods CAN be down | Lower = safer but slower |
-| **maxSurge** | How many EXTRA pods can exist | Higher = faster but more resources |
-
-**Can be percentages or absolute numbers:**
-```yaml
-maxUnavailable: 25%    # 25% of replicas
-maxSurge: 2           # Absolute count
+kubectl rollout undo deployment/myapp --to-revision=2
 ```
 
 ---
 
-### Q5: When would you use a DaemonSet?
+## 📊 Theory to Labs
 
-**Answer:**
-When you need **exactly one pod per node**.
+### Lab 3.1: Production Deployment
+**Theory Applied:**
+- Rolling update configuration
+- Health probes integration
+- Resource management
 
-**Use cases:**
-- Log collectors (Fluentd, Filebeat)
-- Node monitors (Prometheus node-exporter)
-- Network proxies
-- Storage daemons
+### Lab 3.2: Blue-Green Deployment
+**Theory Applied:**
+- Service selector switching
+- Zero-downtime deployments
+- Instant rollback
 
-**Not for:** Applications that need centralized deployment (use Deployment).
+### Lab 3.3: StatefulSet
+**Theory Applied:**
+- Ordered pod management
+- Persistent volume per pod
+- Headless service DNS
+
+### Lab 3.4: CronJob
+**Theory Applied:**
+- Scheduled execution
+- Concurrency policies
+- Job completions
 
 ---
 
-### Q6: What is the difference between StatefulSet and Deployment?
+## 📖 Key Takeaways
+
+1. **Deployment = ReplicaSet + Updates:** Use always for stateless apps
+2. **Rolling Update:** Zero downtime (maxSurge/maxUnavailable)
+3. **Blue-Green:** Fast switch, good for critical apps
+4. **Canary:** Gradual rollout, test with real traffic
+5. **StatefulSet:** Use for databases, ordered ops, stable identity
+6. **Job:** Run to completion, can be parallel
+7. **DaemonSet:** One per node, for infrastructure
+8. **Revision History:** All changes tracked, rollback anytime
+
+---
+
+## ❓ Interview Questions
+
+### Q: RollingUpdate vs Recreate?
+
+**Answer:**
+
+| Aspect | RollingUpdate | Recreate |
+|--------|---------------|----------|
+| **Downtime** | Zero | Yes (brief) |
+| **Old/New pods** | Run simultaneously | Never together |
+| **Resources** | Needs extra capacity | Same resources |
+| **Use case** | Stateless apps | Schema changes, incompatible versions |
+
+**RollingUpdate parameters:**
+- `maxUnavailable`: Max pods that can be down
+- `maxSurge`: Max pods above desired count
+
+---
+
+### Q: Deployment vs StatefulSet?
 
 **Answer:**
 
 | Feature | Deployment | StatefulSet |
 |---------|------------|-------------|
-| Pod identity | Random hash | Ordinal index (0, 1, 2) |
-| Naming | Random | Predictable (name-0, name-1) |
-| Storage | Shared PVC | Each pod gets own PVC |
-| Scaling | Any order | Sequential (0, 1, 2...) |
-| Deletion | Simultaneous | Reverse order |
-| Use case | Stateless apps | Stateful apps (DB, Kafka) |
-| Service | ClusterIP | Headless service |
-
-**StatefulSet is for:** Databases, message queues, distributed systems.
+| Pod names | Random (hash) | Ordinal (0, 1, 2) |
+| Scaling | Any order | Sequential |
+| Storage | Shared | Per-pod PVC |
+| Network | ClusterIP | Headless service |
+| Use case | Web apps, APIs | Databases, queues |
 
 ---
 
-### Q7: How do you do a Blue-Green deployment?
+## 🔗 Next Steps
 
-**Answer:**
+1. Review theory above
+2. Complete [Lab 3.1](./LABS.md) - Production Deployment
+3. Complete [Lab 3.2](./LABS.md) - Blue-Green
+4. Complete [Lab 3.3](./LABS.md) - StatefulSet
 
-**1. Deploy both versions:**
-```yaml
-# Blue (current)
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-blue
-  labels:
-    version: blue
-
----
-# Green (new)
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-green
-  labels:
-    version: green
-```
-
-**2. Service points to blue:**
-```yaml
-selector:
-  version: blue
-```
-
-**3. Test green deployment**
-
-**4. Switch traffic:**
-```bash
-kubectl patch service myapp -p '{"spec":{"selector":{"version":"green"}}}'
-```
-
-**5. Rollback if needed:**
-```bash
-kubectl patch service myapp -p '{"spec":{"selector":{"version":"blue"}}}'
-```
-
----
-
-### Q8: What is a Canary deployment?
-
-**Answer:**
-Deploy new version to **small subset** of users/production traffic first.
-
-**Approaches:**
-
-**1. Separate deployment with replica count:**
-```bash
-# 9 replicas of stable
-kubectl scale deployment/app-stable --replicas=9
-
-# 1 replica of canary
-kubectl scale deployment/app-canary --replicas=1
-```
-
-**2. Service mesh (Istio, Linkerd):**
-- More sophisticated traffic splitting
-- Percentage-based routing
-- Automatic rollback
-
-**Monitoring:** Watch error rates, latency during canary.
-
----
-
-### Q9: What are Jobs and CronJobs?
-
-**Answer:**
-
-**Job:** Runs pods to completion (batch processing)
-- `completions`: How many successful pods needed
-- `parallelism`: How many pods run concurrently
-- `ttlSecondsAfterFinished`: Auto-cleanup
-
-**CronJob:** Scheduled jobs
-- `schedule`: Cron expression
-- `startingDeadlineSeconds`: Must start within time
-- `concurrencyPolicy`: Allow/Forbid/Replace
-
----
-
-### Q10: How do you pause a deployment rollout?
-
-**Answer:**
-
-```bash
-kubectl rollout pause deployment/myapp
-
-# Make changes while paused
-kubectl set image deployment/myapp app=newimage:tag
-kubectl set resources deployment/myapp -c=app --limits=cpu=500m
-
-# Resume rollout
-kubectl rollout resume deployment/myapp
-```
-
-**Use case:** Making multiple changes without triggering multiple rollouts.
-
----
-
-### Q11-20: [See Chapter README for full 20 questions]
-
----
-
-## ✅ Chapter Completion
-
-Mark completed in [CHECKLIST.md](../CHECKLIST.md)
-
-**Next:** [Chapter 4: Services & Networking](../chapter-04/)
+**Next Chapter:** [Chapter 4: Networking](../chapter-04/)

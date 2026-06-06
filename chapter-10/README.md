@@ -1,130 +1,194 @@
-# Chapter 10: Advanced Topics & Scenarios
+# Chapter 10: Advanced Topics
 
 ## 📚 Learning Objectives
 
-- Operators and CRDs
-- Real-world troubleshooting
-- Performance optimization
-- Best practices
+By the end of this chapter, you will:
+- Create Custom Resource Definitions (CRDs)
+- Implement GitOps workflows
+- Understand disaster recovery strategies
+- Prepare for real-world scenarios
+
+**Estimated Time:** 4 days  
+**Labs:** 3 hands-on exercises
 
 ---
 
-## Top 50 Kubernetes Interview Questions - Master List
+## 🔧 Custom Resource Definitions (CRD)
 
-### Architecture (5 questions)
-1. ✅ What happens when you run `kubectl apply`? → [Ch1 Q1](../chapter-01/README.md#q1)
-2. ✅ Explain etcd architecture → [Ch1 Q2](../chapter-01/README.md#q2)
-3. ✅ How does the scheduler decide which node? → [Ch1 Q3](../chapter-01/README.md#q3)
-4. ✅ What is the reconciliation loop? → [Ch1 Q4](../chapter-01/README.md#q4)
-5. ✅ Control plane vs Data plane → [Ch1 Q5](../chapter-01/README.md#q5)
+### Purpose
 
-### Pods (5 questions)
-6. ✅ Pod vs Container → [Ch2 Q1](../chapter-02/README.md#q1)
-7. ✅ Multi-container pod use cases → [Ch2 Q2](../chapter-02/README.md#q2)
-8. ✅ Init containers vs sidecars → [Ch2 Q3](../chapter-02/README.md#q3)
-9. ✅ Pod communication within same pod → [Ch2 Q4](../chapter-02/README.md#q4)
-10. ✅ Pod restart policies → [Ch2 Q5](../chapter-02/README.md#q5)
+Extend Kubernetes API with custom resources.
 
-### Workloads (5 questions)
-11. ✅ Deployment vs ReplicaSet → [Ch3 Q1](../chapter-03/README.md#q1)
-12. ✅ Rolling update strategy → [Ch3 Q2](../chapter-03/README.md#q2)
-13. ✅ How to rollback → [Ch3 Q3](../chapter-03/README.md#q3)
-14. ✅ maxUnavailable vs maxSurge → [Ch3 Q4](../chapter-03/README.md#q4)
-15. ✅ When to use DaemonSet → [Ch3 Q5](../chapter-03/README.md#q5)
+### How CRDs Work
 
-### Networking (10 questions)
-16. ✅ ClusterIP vs NodePort vs LoadBalancer → [Ch4 Q1](../chapter-04/README.md#q1)
-17. ✅ How kube-proxy works → [Ch4 Q2](../chapter-04/README.md#q2)
-18. ✅ Headless service → [Ch4 Q3](../chapter-04/README.md#q3)
-19. DNS resolution in Kubernetes
-20. Service endpoints
-21. External traffic policy
-22. Session affinity
-23. Ingress vs LoadBalancer
-24. Network policies default deny
-25. CNI plugins
+```
+┌─────────────────────────────────────────────────────┐
+│  User defines CRD                                   │
+│  (Custom Resource Definition)                       │
+│          │                                          │
+│          ▼                                          │
+│  Kubernetes API extended                            │
+│  - New API endpoint created                         │
+│  - Validation schema registered                     │
+│          │                                          │
+│          ▼                                          │
+│  User creates Custom Resource                       │
+│  (instance of the CRD)                              │
+│          │                                          │
+│          ▼                                          │
+│  Operator watches and acts                          │
+│  - Reconciles desired state                         │
+│  - Manages real resources                           │
+└─────────────────────────────────────────────────────┘
+```
 
-### Storage (4 questions)
-26. ✅ PV vs PVC → [Ch5 Q1](../chapter-05/README.md#q1)
-27. ✅ Access modes → [Ch5 Q2](../chapter-05/README.md#q2)
-28. Storage class purpose
-29. Dynamic vs static provisioning
+### Example: Database CRD
 
-### Configuration (3 questions)
-30. ✅ ConfigMap vs Secret → [Ch6 Q1](../chapter-06/README.md#q1)
-31. Secret encryption
-32. Downward API
-
-### Observability (5 questions)
-33. ✅ Liveness vs Readiness → [Ch7 Q1](../chapter-07/README.md#q1)
-34. Probe types and parameters
-35. Startup probes
-36. Debugging CrashLoopBackOff
-37. OOMKilled investigation
-
-### Scheduling (5 questions)
-38. ✅ How HPA works → [Ch8 Q1](../chapter-08/README.md#q1)
-39. ✅ HPA vs VPA → [Ch8 Q2](../chapter-08/README.md#q2)
-40. Node affinity
-41. Taints and tolerations
-42. Pod disruption budgets
-
-### Security (8 questions)
-43. ✅ RBAC components → [Ch9 Q1](../chapter-09/README.md#q1)
-44. ✅ Network policies → [Ch9 Q2](../chapter-09/README.md#q2)
-45. Service account tokens
-46. Pod security standards
-47. Security contexts
-48. Secret management best practices
-49. TLS in Kubernetes
-50. Principle of least privilege
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: databases.example.com
+spec:
+  group: example.com
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              replicas:
+                type: integer
+                minimum: 1
+              storage:
+                type: string
+  scope: Namespaced
+  names:
+    plural: databases
+    kind: Database
+```
 
 ---
 
-## Scenario-Based Questions
+## 🔄 GitOps
 
-### S1: Application is down
-**Debug steps:**
-1. `kubectl get pods` - check status
-2. `kubectl describe pod` - check Events
-3. `kubectl logs` - check app logs
-4. `kubectl logs --previous` - if crashed
-5. `kubectl get events --sort-by=.metadata.creationTimestamp`
-6. Check resource limits, node status, network policies
+### Concept
 
-### S2: Slow application performance
-**Investigate:**
-1. `kubectl top pods` - check resource usage
-2. `kubectl top nodes` - check node capacity
-3. HPA status
-4. Node affinity/distribution
-5. Network latency
+Git as single source of truth for cluster state.
 
-### S3: Image pull errors
-**Common causes:**
-- Wrong image name/tag
-- Private registry without imagePullSecret
-- Network connectivity issues
-- Registry authentication expired
+```
+┌─────────────────────────────────────────────────────┐
+│                                                     │
+│   Git Repository                                    │
+│   ├── manifests/                                    │
+│   │   ├── deployment.yaml                           │
+│   │   ├── service.yaml                              │
+│   │   └── configmap.yaml                            │
+│   └── kustomization.yaml                            │
+│          │                                          │
+│          │ GitOps Tool (Flux/ArgoCD) watches        │
+│          ▼                                          │
+│   Kubernetes Cluster                                │
+│   - Resources automatically applied                 │
+│   - Drift detection and correction                  │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
 
-### S4: DNS not resolving
-**Debug:**
-1. Check CoreDNS pods: `kubectl get pods -n kube-system -l k8s-app=kube-dns`
-2. Test from pod: `nslookup kubernetes.default`
-3. Check CoreDNS config: `kubectl get configmap coredns -n kube-system`
-4. Check network policies blocking DNS (port 53)
+### Benefits
 
-### S5: Volume mount issues
-**Check:**
-1. PVC status: `kubectl get pvc`
-2. PV availability
-3. Mount permissions
-4. SELinux/AppArmor blocking
+- Version control for infrastructure
+- Audit trail
+- Easy rollbacks
+- Collaboration
+- Drift detection
 
 ---
 
-## ✅ Chapter Completion
+## 💾 Disaster Recovery
 
-Mark completed in [CHECKLIST.md](../CHECKLIST.md)
+### etcd Backup
 
-**Congratulations! You've completed all chapters!**
+```bash
+# Backup
+etcdctl snapshot save backup.db
+
+# Restore
+etcdctl snapshot restore backup.db
+```
+
+### Velero for Cluster Backup
+
+Backs up:
+- Kubernetes resources
+- Persistent volumes
+
+```yaml
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: daily-backup
+spec:
+  includedNamespaces:
+  - production
+  storageLocation: aws
+  ttl: 720h
+```
+
+---
+
+## 📊 Theory to Labs
+
+### Lab 10.1: CRD
+**Theory Applied:**
+- Custom resource definition
+- Schema validation
+- Creating instances
+
+### Lab 10.2: GitOps
+**Theory Applied:**
+- GitOps principles
+- Flux/ArgoCD setup
+- Declarative updates
+
+### Lab 10.3: Disaster Recovery
+**Theory Applied:**
+- etcd backup
+- Velero backup
+- Restore procedures
+
+---
+
+## 📖 Key Takeaways
+
+1. **CRD:** Extend Kubernetes API
+2. **Operator:** Controller for custom resources
+3. **GitOps:** Git as source of truth
+4. **etcd Backup:** Critical for disaster recovery
+5. **Velero:** Full cluster backup solution
+
+---
+
+## 🎓 Congratulations!
+
+You have completed all 10 chapters!
+
+### Next Steps
+
+1. Complete all labs
+2. Practice interview questions
+3. Take the CKA/CKAD exam
+4. Build real projects
+
+---
+
+## 🔗 Repository
+
+**GitHub:** https://github.com/Ramiz-Takildar/kubernetes-zero-to-hero
+
+**Track Progress:** [CHECKLIST.md](../CHECKLIST.md)

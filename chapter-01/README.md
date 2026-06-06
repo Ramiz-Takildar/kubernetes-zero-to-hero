@@ -3,447 +3,469 @@
 ## 📚 Learning Objectives
 
 By the end of this chapter, you will:
-- Understand all Control Plane components
-- Understand all Node components
-- Know how requests flow through the system
-- Understand etcd's role
-- Explain the reconciliation loop
+- Master Kubernetes control plane architecture
+- Understand how the API Server processes requests
+- Learn etcd's role as the single source of truth
+- Explain scheduler algorithms and decision-making
+- Understand the reconciliation loop concept
+- Configure high availability for control plane components
 
-**Estimated Time:** 2 days
+**Prerequisites:** Basic Linux, container concepts  
+**Estimated Time:** 2 days  
+**Labs:** 4 hands-on exercises
 
 ---
 
-## 1.1 Control Plane Components
+## 🏗️ Architecture Overview
 
-### API Server (kube-apiserver)
+### The Big Picture
 
-**What it does:**
-- Front-end for Kubernetes API
-- Validates and processes all REST requests
-- Serves as the central communication hub
+Kubernetes follows a master-worker architecture. The control plane (master) manages the cluster state, while worker nodes run your applications.
 
-**Key Points:**
 ```
-All communication → API Server → Other components
-                         ↑
-                    etcd (data store)
+                    ┌─────────────────────────────────────┐
+                    │         CONTROL PLANE               │
+                    │    (Usually 3+ nodes for HA)        │
+                    │                                     │
+                    │  ┌─────────────┐   ┌─────────────┐ │
+                    │  │ API Server  │   │   etcd      │ │
+                    │  │ (Kube-api)  │◄─►│ (Database)  │ │
+                    │  └──────┬──────┘   └─────────────┘ │
+                    │         │                         │
+                    │  ┌──────┴──────┐   ┌─────────────┐ │
+                    │  │  Scheduler  │   │ Controller  │ │
+                    │  │             │   │  Manager    │ │
+                    │  └─────────────┘   └─────────────┘ │
+                    └──────────┬──────────────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+    ┌─────────────────────────────────────────────────────┐
+    │                  WORKER NODES                       │
+    │                                                     │
+    │  ┌────────────────┐  ┌────────────────┐            │
+    │  │    Node 1      │  │    Node 2      │            │
+    │  │                │  │                │            │
+    │  │  ┌──────────┐  │  │  ┌──────────┐  │            │
+    │  │  │ Kubelet  │  │  │  │ Kubelet  │  │            │
+    │  │  └────┬─────┘  │  │  └────┬─────┘  │            │
+    │  │  ┌────┴─────┐  │  │  ┌────┴─────┐  │            │
+    │  │  │ Container│  │  │  │ Container│  │            │
+    │  │  │ Runtime  │  │  │  │ Runtime  │  │            │
+    │  │  └──────────┘  │  │  └──────────┘  │            │
+    │  │  ┌──────────┐  │  │  ┌──────────┐  │            │
+    │  │  │Kube-proxy│  │  │  │Kube-proxy│  │            │
+    │  │  └──────────┘  │  │  └──────────┘  │            │
+    │  └────────────────┘  └────────────────┘            │
+    └─────────────────────────────────────────────────────┘
 ```
 
-**Interview Focus:**
-- Single entry point to cluster
-- Authentication & Authorization happens here
-- Rate limiting and admission control
-- Can be scaled horizontally for HA
+---
 
-### etcd
+## 🔧 Control Plane Components Deep Dive
 
-**What it does:**
+### 1. API Server (kube-apiserver)
+
+**Role:** The brain's receptionist - all communication goes through here.
+
+**Key Responsibilities:**
+- **Authentication:** Verifies who you are (certificates, tokens, OIDC)
+- **Authorization:** Checks if you're allowed (RBAC, ABAC, Webhook)
+- **Validation:** Ensures your YAML is valid
+- **Admission Control:** Mutates or validates requests (security policies, quotas)
+- **REST API:** Exposes Kubernetes API over HTTPS
+
+**Request Flow:**
+```
+kubectl apply → API Server → AuthN → AuthZ → Admission → etcd
+```
+
+**Scaling:**
+- Horizontally scalable (run multiple instances)
+- Stateless (all data in etcd)
+- Behind a load balancer for HA
+
+**Interview Gold:**
+> "When you run kubectl apply, the API Server authenticates you, checks RBAC permissions, runs through admission controllers like ResourceQuota and PodSecurityPolicy, validates the schema, and finally writes to etcd."
+
+---
+
+### 2. etcd - The Single Source of Truth
+
+**What is etcd?**
 - Distributed key-value store
-- Stores ALL cluster state and configuration
-- Only component that talks directly to storage
-
-**Key Commands:**
-```bash
-# Check etcd pods
-kubectl get pods -n kube-system | grep etcd
-
-# Backup etcd
-ETCDCTL_API=3 etcdctl snapshot save backup.db
-
-# Restore etcd
-ETCDCTL_API=3 etcdctl snapshot restore backup.db
-```
-
-**Critical Interview Points:**
-- Only API server talks to etcd
-- Must be backed up regularly
-- Corruption = cluster failure
 - Uses Raft consensus algorithm
+- Stores ALL cluster state
+- Only API Server talks to etcd
 
-### Scheduler (kube-scheduler)
-
-**What it does:**
-- Watches for unassigned pods
-- Determines which node runs which pod
-
-**Scheduling Algorithm:**
-1. **Filtering:** Remove nodes that don't fit
-   - Resource availability
-   - Node selectors
-   - Taints/tolerations
-   - Affinity rules
-
-2. **Scoring:** Rank remaining nodes
-   - Resource utilization
-   - Affinity weights
-   - Inter-pod affinity
-
-**Customize Scheduler:**
-```yaml
-apiVersion: v1
-kind: Pod
-spec:
-  schedulerName: my-custom-scheduler
-```
-
-### Controller Manager
-
-**What it does:**
-- Runs various controllers in a loop
-- Each controller watches specific resources
-
-**Key Controllers:**
-| Controller | Watches | Does |
-|------------|---------|------|
-| Node Controller | Node status | Responds to node failure |
-| Replication Controller | Pods | Maintains correct pod count |
-| Endpoints Controller | Services/Pods | Links services to pods |
-| Service Account Controller | SAs | Creates default service accounts |
-
----
-
-## 1.2 Node Components
-
-### Kubelet
-
-**What it does:**
-- Agent running on every node
-- Ensures containers are running in pods
-- Reports node and pod status to API server
-
-**Key Operations:**
-- Pod spec received from API server
-- Talks to container runtime via CRI
-- Mounts volumes
-- Executes probes
-
-**Interview Point:**
-```
-If kubelet fails → Pods on that node become orphaned
-Pod continues running but no status updates
-```
-
-### Container Runtime
-
-**Options:**
-- **containerd** (Docker uses this internally)
-- **CRI-O** (Red Hat preferred)
-- **Docker** (deprecated in K8s 1.24+)
-
-**Interface:** CRI (Container Runtime Interface)
-
-### Kube-proxy
-
-**What it does:**
-- Maintains network rules for services
-- Enables service abstraction
-
-**Modes:**
-| Mode | How it works |
-|------|--------------|
-| iptables (default) | IPTables rules for routing |
-| IPVS | Kernel-level load balancing |
-| userspace | Legacy mode (rarely used) |
-
----
-
-## 1.3 Request Flow
-
-```
-User runs: kubectl apply -f pod.yaml
-
-    ↓
-┌─────────────────┐
-│   kubectl       │ ← Validates YAML, sends to API Server
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│   API Server    │ ← Authenticates user, validates request
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│      etcd       │ ← Stores the desired state
-└────────┬────────┘
-         ↓ (Controllers watch for changes)
-┌─────────────────┐
-│   Scheduler     │ ← Assigns node to unassigned pod
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│     Kubelet     │ ← On assigned node, creates pod
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ Container Runtime│ ← Pulls image, starts container
-└─────────────────┘
-```
-
----
-
-## 1.4 The Reconciliation Loop
-
-**Core Principle:**
-```
-Desired State (in etcd) ←──→ Actual State (in cluster)
-                                  ↑
-                            Controller makes
-                            them match
-```
-
-**Example:**
-1. User creates Deployment with 3 replicas
-2. Desired state: 3 pods
-3. Controller sees 0 pods
-4. Controller creates 3 pods
-5. Controller continuously checks: "Do we have 3 pods?"
-6. If pod dies → Controller creates new one
-
----
-
-## 💻 Hands-On
-
-```bash
-# Check control plane pods
-kubectl get pods -n kube-system
-
-# Check node components
-systemctl status kubelet
-
-# View API server logs
-kubectl logs -n kube-system kube-apiserver-<node>
-
-# Check kube-proxy mode
-kubectl get configmap kube-proxy -n kube-system -o yaml | grep mode
-```
-
----
-
-## ❓ Interview Questions (15)
-
-### Q1: What happens when you run `kubectl apply`?
-
-**Answer:**
-1. kubectl validates YAML locally
-2. Converts to JSON, sends POST/PUT to API Server
-3. API Server authenticates & authorizes request
-4. Admission controllers modify/validate request
-5. Request stored in etcd
-6. Controllers watch for changes via API Server
-7. Scheduler assigns node (if needed)
-8. Kubelet creates pod on node
-9. Container runtime starts containers
-10. Status reported back to API Server
-
----
-
-### Q2: Explain etcd architecture and why it's critical
-
-**Answer:**
-- Distributed key-value store using Raft consensus
-- Stores cluster state, configuration, secrets
-- Only API Server communicates with etcd
-- **Single source of truth**
-- **If etcd is lost → cluster is lost**
-- Regular backups essential
-- Should run on dedicated, fast storage (SSD)
-
----
-
-### Q3: How does the scheduler decide which node to place a pod?
-
-**Answer:**
-
-Two-phase process:
-
-**1. Filtering:** Eliminate unsuitable nodes
-- Resource requirements (CPU, memory)
-- Node selectors
-- Taints and tolerations
-- Hardware/software constraints
-
-**2. Scoring:** Rank remaining nodes
-- Least requested resources gets higher score
-- Affinity rules add points
-- Pod spread adds points
-
-Highest scoring node wins.
-
----
-
-### Q4: What is the reconciliation loop?
-
-**Answer:**
-The continuous process where controllers ensure the **actual state** matches the **desired state** stored in etcd.
-
-Example: Deployment controller constantly checks pod count. If a pod dies, it creates a new one. If too many exist, it removes extras.
-
----
-
-### Q5: Control plane vs Data plane
-
-**Answer:**
-
-| Control Plane | Data Plane |
-|---------------|------------|
-| Makes decisions | Executes decisions |
-| API Server, etcd, Scheduler, Controller Manager | kubelet, kube-proxy, Container Runtime |
-| Can be replicated for HA | Runs on every worker node |
-| Brain of the cluster | Muscles of the cluster |
-
----
-
-### Q6: What happens when control plane node fails?
-
-**Answer:**
-Depends on setup:
-
-**Single control plane:**
-- No new pods can be scheduled
-- Existing pods continue running
-- Cannot make changes to cluster
-
-**Multi-node HA control plane:**
-- etcd quorum maintained (majority up)
-- Other API servers take over
-- Cluster continues operating
-
----
-
-### Q7: Explain API Server authentication flow
-
-**Answer:**
-1. Client presents credentials (cert, token, etc.)
-2. API Server validates against configured auth method
-3. If valid, determines username
-4. Authorization: Check RBAC/ABAC for permissions
-5. Admission: Mutating webhooks modify request
-6. Validating webhooks check request
-7. Store in etcd
-
----
-
-### Q8: How are resources stored in etcd?
-
-**Answer:**
-As key-value pairs with prefixed paths:
+**Data Structure:**
 ```
 /registry/pods/default/my-pod
-/registry/deployments/default/my-deploy
-/registry/secrets/default/my-secret
+/registry/deployments/production/api
+/registry/secrets/default/db-password
+/registry/nodes/worker-1
 ```
 
-Values are JSON-encoded resource objects.
+**Critical Concepts:**
+- **Consistency:** All API servers see same data
+- **Watch:** Uses long-polling for real-time updates
+- **Revision:** Every change increments a version number
+- **Compaction:** Old revisions removed to save space
+
+**Production Considerations:**
+- **Backups Essential:** Loss of etcd = loss of cluster
+- **SSD Required:** Disk I/O critical for performance
+- **3+ Nodes:** Odd number for quorum (3, 5, 7)
+- **Network Latency:** < 10ms between etcd nodes
+
+**Backup Strategy:**
+```bash
+# Automated backup (every 6 hours)
+# See Lab 1.1 for production CronJob
+```
 
 ---
 
-### Q9: Explain kube-proxy modes
+### 3. Scheduler (kube-scheduler)
 
-**Answer:**
+**The Matchmaker:** Decides which node runs each pod.
+
+**Two-Phase Algorithm:**
+
+#### Phase 1: Filtering (Remove Unsuitable Nodes)
+```
+                ┌──────────────────────────────┐
+                │   All Nodes (10 nodes)       │
+                └──────────────┬───────────────┘
+                               │
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+   Filter:               Filter:               Filter:
+   DiskPressure        Insufficient CPU      Taint Mismatch
+        │                      │                      │
+        ▼                      ▼                      ▼
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│ Node 1       │      │ Node 4       │      │ All Others   │
+│ ❌ Disk Full │      │ ❌ CPU Low   │      │ ✅ Possible  │
+└──────────────┘      └──────────────┘      └──────────────┘
+                               
+                ┌──────────────────────┐
+                │ 3 Nodes Remaining    │
+                │ (Node 2, 3, 5)       │
+                └──────────┬───────────┘
+                           │
+                           ▼
+```
+
+**Filtering Criteria:**
+- Resource requirements (CPU/memory)
+- Node selectors and affinity
+- Taints and tolerations
+- Volume availability
+- Hardware/software constraints
+
+#### Phase 2: Scoring (Rank Remaining Nodes)
+
+Each node gets a score (0-100). Highest score wins.
+
+**Scoring Factors:**
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Least Resource | 10 | Nodes with most available resources |
+| Node Affinity | 8 | Matching node labels |
+| Inter-pod Affinity | 5 | Pods that should be together |
+| Image Locality | 2 | Node already has image |
+
+**Example Decision:**
+```
+Node A: Score 85 (most free CPU, image cached)
+Node B: Score 60 (moderate resources)
+Node C: Score 45 (nearly full)
+
+→ Pod scheduled on Node A
+```
+
+---
+
+### 4. Controller Manager (kube-controller-manager)
+
+**The Conductor:** Runs multiple controllers in a single process.
+
+**What is a Controller?**
+A loop that watches the desired state and makes reality match it.
+
+```
+┌─────────────┐
+│   Watch     │◄── etcd changes
+│    API      │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Compare    │
+│ Desired vs  │
+│   Actual    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│   Act       │
+│  (Create/   │
+│  Delete)    │
+└─────────────┘
+```
+
+**Key Controllers:**
+
+| Controller | Monitors | Action When Needed |
+|------------|----------|-------------------|
+| **Deployment** | Deployment objects | Creates/updates ReplicaSets |
+| **ReplicaSet** | Pod count | Creates/deletes pods |
+| **Node** | Node status | Marks nodes unhealthy |
+| **Endpoint** | Service + Pods | Updates service endpoints |
+| **Service Account** | Namespace | Creates default SA |
+
+**Example - ReplicaSet Controller:**
+1. User: Set replicas to 3
+2. etcd: Now stores desired=3
+3. Controller: Sees 2 pods running
+4. Controller: Creates 1 more pod
+5. Controller: Watches continuously
+
+---
+
+## 🖥️ Node Components
+
+### Kubelet - The Node Agent
+
+**Responsibilities:**
+1. **Registration:** Registers node with API server
+2. **Pod Lifecycle:** Creates/destroys containers (via CRI)
+3. **Health Reporting:** Reports node and pod status
+4. **Volume Mounting:** Mounts volumes for pods
+5. **Secret/ConfigMap:** Makes configs available
+
+**Communication:**
+```
+Kubelet ←──(HTTPS)──→ API Server
+   │
+   └──(CRI)──→ Container Runtime (containerd/CRI-O)
+```
+
+**Important:** If kubelet fails, pods continue running but no new pods are scheduled.
+
+---
+
+### Kube-proxy - Network Proxy
+
+**Purpose:** Implements Kubernetes Service networking.
+
+**Modes:**
 
 | Mode | Mechanism | Pros | Cons |
 |------|-----------|------|------|
-| **iptables** | iptables rules | Works everywhere | Large clusters = slow, O(n) rules |
-| **IPVS** | Kernel load balancer | Fast, O(1) lookups | Requires ipvs kernel module |
-| **userspace** | Userspace proxy | Legacy, portable | Slow, extra hop |
+| **IPTables** (default) | NAT rules via iptables | Universal | O(n) rules |
+| **IPVS** | Kernel load balancer | Fast O(1) | Needs kernel module |
+| **Userspace** | Userspace proxy | Portable | Slow |
 
----
-
-### Q10: What happens if etcd fails?
-
-**Answer:**
-- Cluster becomes read-only
-- Cannot create/update/delete resources
-- Existing pods continue running
-- Kubelet doesn't receive updates
-
-**Recovery:** Restore from backup on new etcd cluster.
-
----
-
-### Q11: How to backup and restore etcd?
-
-**Answer:**
-
-**Backup:**
-```bash
-ETCDCTL_API=3 etcdctl snapshot save backup.db \
-  --endpoints=https://127.0.0.1:2379 \
-  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-  --cert=/etc/kubernetes/pki/etcd/server.crt \
-  --key=/etc/kubernetes/pki/etcd/server.key
+**How It Works (IPTables Mode):**
 ```
-
-**Restore:**
-```bash
-ETCDCTL_API=3 etcdctl snapshot restore backup.db \
-  --data-dir=/var/lib/etcd-restore
-# Update etcd to use new data-dir
+Service IP (10.96.0.1:80)
+         │
+    Kube-proxy iptables rule
+         │
+    ┌────┴────┐
+    │         │
+ Pod IP:1   Pod IP:2
+ :8080      :8080
 ```
 
 ---
 
-### Q12: How to set up HA control plane?
+## 📊 Request Flow Deep Dive
 
-**Answer:**
-- Minimum 3 control plane nodes (for etcd quorum)
-- Stacked topology: etcd runs on control plane nodes
-- External topology: etcd runs on separate nodes
-- Use load balancer in front of API servers
-- All kubelets connect to LB endpoint
+When you run `kubectl apply -f deployment.yaml`:
+
+```
+Step 1: kubectl
+   - Validates YAML locally (client-side validation)
+   - Reads ~/.kube/config for cluster credentials
+   - Converts YAML to JSON
+
+Step 2: API Server (kube-apiserver)
+   ├─ Authenticates request (cert/token)
+   ├─ Authorization check (RBAC)
+   ├─ Admission Controllers:
+   │  ├─ NamespaceLifecycle (namespace exists?)
+   │  ├─ LimitRanger (resource limits ok?)
+   │  ├─ ServiceAccount (inject SA if missing)
+   │  ├─ ResourceQuota (quota not exceeded?)
+   │  └─ PodSecurityPolicy (pod allowed?)
+   ├─ Validation (schema valid?)
+   └─ Writes to etcd
+
+Step 3: etcd
+   - Stores JSON representation
+   - Increments resource version
+   - Triggers watch notifications
+
+Step 4: Controllers (Deployment Controller)
+   - Watches for new Deployment
+   - Creates ReplicaSet
+   - Watches and reacts
+
+Step 5: Scheduler
+   - Sees pod with no node assigned
+   - Runs filtering/scoring
+   - Binds pod to node
+
+Step 6: Kubelet (on selected node)
+   - Notices pod assigned to its node
+   - Pulls container image
+   - Starts containers
+   - Mounts volumes
+   - Configures networking
+
+Step 7: Kube-proxy
+   - Updates iptables for Service endpoints
+
+Step 8: Status Updates
+   - Container runtime reports status
+   - Kubelet reports to API Server
+   - API Server updates etcd
+   - kubectl shows "Running"
+```
+
+**Total Latency:** Typically 1-5 seconds for pod startup
 
 ---
 
-### Q13: What is resource versioning in etcd?
+## 🔄 The Reconciliation Loop
 
-**Answer:**
-Each resource has a `resourceVersion` field. Used for:
-- Optimistic concurrency control
-- Watch mechanism to detect changes
-- Prevents updates based on stale data
+This is the fundamental concept of Kubernetes.
+
+### Concept
+```
+Desired State ───────┐
+   (etcd)            │
+     ▲               │
+     │ Watch         │ Controller
+     │               │ Loop
+┌────┴───────────┐   │
+│   Actual State │◄──┘
+│   (reality)    │
+└────┬───────────┘
+     │
+     │ Observe
+     ▼
+┌────────────┐
+│   Diff?    │ No → Sleep
+│            │ Yes → Action
+└────┬───────┘
+     │
+     ▼
+┌────────────┐
+│   Act      │
+│(Create/Del)│
+└────────────┘
+```
+
+### Example: Deployment Reconciliation
+
+**Initial State:**
+- Desired: 3 replicas
+- Actual: 0 pods
+
+**Iteration 1:**
+- Diff: Need 3 pods
+- Act: Create 3 pods
+- Actual: 3 pods
+
+**Pod Dies (node fails):**
+- Desired: 3
+- Actual: 2
+
+**Iteration 2:**
+- Diff: Need 1 more
+- Act: Create 1 pod
+- Actual: 3 pods
+
+**Self-Healing achieved!**
 
 ---
 
-### Q14: Explain the Watch mechanism
+## 🎯 Preparing for the Labs
 
-**Answer:**
-API Server provides watch endpoint for real-time notifications.
+### Lab 1.1: etcd Backup
+**Theory Applied:**
+- etcd as the cluster database
+- Backup importance for disaster recovery
+- CronJobs for automation
 
-**Flow:**
-1. Controller opens watch connection to API Server
-2. API Server watches etcd for changes
-3. Change occurs → etcd notifies API Server
-4. API Server streams change to controller
-5. Controller reacts (reconciliation)
+### Lab 1.2: API Server Monitoring
+**Theory Applied:**
+- API Server as entry point
+- Health endpoints (/healthz, /livez, /readyz)
+- Authentication flow
 
-**Benefit:** Efficient - no polling needed.
+### Lab 1.3: Controller Manager
+**Theory Applied:**
+- Controller reconciliation loops
+- Self-healing behavior
+- ReplicaSet management
 
----
-
-### Q15: What are Admission Controllers?
-
-**Answer:**
-Plugins that intercept requests to API Server.
-
-**Types:**
-- **Mutating:** Modify requests (add defaults, inject sidecars)
-- **Validating:** Reject invalid requests
-
-**Common controllers:**
-- NamespaceLifecycle
-- LimitRanger
-- ServiceAccount
-- DefaultStorageClass
-- ResourceQuota
-- PodSecurityPolicy
+### Lab 1.4: Scheduler
+**Theory Applied:**
+- Node selection algorithm
+- QoS classes (Guaranteed, Burstable, BestEffort)
+- Resource requests and limits
 
 ---
 
-## ✅ Chapter Completion
+## 📖 Key Takeaways
 
-Mark completed in [CHECKLIST.md](../CHECKLIST.md):
-- [ ] All theory sections read
-- [ ] All 15 interview questions reviewed
-- [ ] Hands-on commands executed
-- [ ] Can whiteboard architecture diagram
+1. **API Server** is the gateway - everything flows through it
+2. **etcd** is the truth - protect it with backups
+3. **Scheduler** is the matchmaker - finds the right node
+4. **Controllers** are the janitors - constantly fixing things
+5. **Kubelet** is the executor - does the actual work
+6. **Reconciliation Loop** is the magic - self-healing by default
 
-**Next:** [Chapter 2: Pods & Containers](../chapter-02/)
+---
+
+## ❓ Interview Questions Explained
+
+### Q1: What happens when you run `kubectl apply`?
+
+**Detailed Answer:**
+
+1. **Client Side:** kubectl validates YAML, converts to JSON, figures out which API endpoint to call
+2. **Authentication:** API Server validates your certificate/token
+3. **Authorization:** Checks RBAC - can you create Deployments in this namespace?
+4. **Admission:** 
+   - Mutating webhooks may modify your request (inject sidecars)
+   - Validating webhooks check policies
+5. **Validation:** JSON schema validation
+6. **Persistence:** Written to etcd with new resourceVersion
+7. **Reaction:**
+   - Deployment controller sees it, creates ReplicaSet
+   - ReplicaSet controller sees it, creates Pods
+   - Scheduler sees unscheduled pods, assigns nodes
+   - kubelet starts containers
+
+**Key Interview Phrases:**
+- "Admission controllers can modify or reject requests"
+- "etcd is the source of truth, everything else reacts to it"
+- "The pattern is watch → compare → act"
+
+---
+
+## 🔗 Next Steps
+
+1. Read the theory above ⬆️
+2. Complete [Lab 1.1](./LABS.md#lab-11-high-availability-control-plane-setup)
+3. Answer the interview questions at the end of each lab
+4. Track progress in [CHECKLIST.md](../CHECKLIST.md)
+
+**Next Chapter:** [Chapter 2: Pods & Containers](../chapter-02/)
