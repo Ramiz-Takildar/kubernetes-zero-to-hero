@@ -4,9 +4,28 @@
 
 ## 📋 Progress Tracking
 
-Track your progress with the interactive web tracker:
+Choose your preferred tracking method:
 
-### 🎯 Open PROGRESS.html
+### Option 1: CHECKLIST.md (Git-Based, Recommended)
+
+Update progress directly in Git:
+
+```bash
+# Edit the checklist
+vim CHECKLIST.md
+# or
+nano CHECKLIST.md
+
+# Mark items complete by changing [ ] to [x]
+# Don't forget to commit!
+git add CHECKLIST.md
+git commit -m "Progress: Completed Chapter 1"
+git push
+```
+
+### Option 2: PROGRESS.html (Visual, Browser-Based)
+
+Open in your browser for visual tracking:
 
 ```bash
 # Mac
@@ -19,12 +38,7 @@ xdg-open PROGRESS.html
 start PROGRESS.html
 ```
 
-**Features:**
-- ✅ Click to mark items complete
-- ✅ Visual progress bars
-- ✅ Auto-saves to browser
-- ✅ Export/Import progress
-- ✅ Works offline
+**Features:** Click to mark, visual bars, auto-saves locally
 
 | Status | Meaning |
 |--------|---------|
