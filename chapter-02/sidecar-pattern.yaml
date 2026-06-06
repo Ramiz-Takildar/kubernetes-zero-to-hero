@@ -1,0 +1,53 @@
+# Chapter 2: Sidecar Pattern Example
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sidecar-demo
+spec:
+  volumes:
+  - name: shared-logs
+    emptyDir: {}
+  
+  containers:
+  # Main application container
+  - name: main-app
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Starting main application..."
+      i=1
+      while true; do
+        echo "$(date) - Log entry $i" >> /var/log/app.log
+        echo "Main app wrote log entry $i"
+        i=$((i + 1))
+        sleep 5
+      done
+    volumeMounts:
+    - name: shared-logs
+      mountPath: /var/log
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"
+  
+  # Sidecar: Log aggregator/shippers
+  - name: log-agent
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Starting log agent..."
+      tail -f /var/log/app.log | while read line; do
+        echo "[AGENT] Processing: $line"
+        # In real world: ship to ELK/CloudWatch/etc
+      done
+    volumeMounts:
+    - name: shared-logs
+      mountPath: /var/log
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"

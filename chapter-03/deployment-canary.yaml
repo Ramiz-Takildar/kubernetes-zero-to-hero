@@ -1,0 +1,64 @@
+# Chapter 3: Canary Deployment Example
+
+# Stable version (90% traffic)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-stable
+  labels:
+    app: web
+    version: stable
+spec:
+  replicas: 9
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.24
+        ports:
+        - containerPort: 80
+
+---
+
+# Canary version (10% traffic)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-canary
+  labels:
+    app: web
+    version: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.25
+        ports:
+        - containerPort: 80
+
+---
+
+# Service routes to both
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    app: web  # Matches both deployments
+  ports:
+  - port: 80

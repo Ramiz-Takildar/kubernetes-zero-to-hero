@@ -1,0 +1,27 @@
+# Kubernetes
+*.kubeconfig
+kubeconfig
+
+# Secrets (be careful!)
+*-secret.yaml
+secrets.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+echo "All labs completed successfully!"

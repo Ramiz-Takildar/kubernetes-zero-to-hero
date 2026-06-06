@@ -1,0 +1,76 @@
+# Chapter 2: Init Container Example
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-demo
+spec:
+  initContainers:
+  # Init Container 1: Wait for database
+  - name: wait-for-db
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "Waiting for database..."
+      until nc -z db-service 5432; do
+        echo "Database not ready, waiting..."
+        sleep 2
+      done
+      echo "Database is ready!"
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+  
+  # Init Container 2: Run migrations
+  - name: run-migrations
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "Running database migrations..."
+      sleep 5
+      echo "Migrations complete!"
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "50m"
+  
+  # Init Container 3: Set permissions
+  - name: setup-permissions
+    image: busybox
+    command:
+    - sh
+    - -c
+    - |
+      echo "Setting up file permissions..."
+      mkdir -p /app/data
+      chmod 755 /app/data
+      echo "Permissions set!"
+    volumeMounts:
+    - name: app-data
+      mountPath: /app/data
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+  
+  # Main container only starts after ALL init containers succeed
+  containers:
+  - name: main-app
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: app-data
+      mountPath: /usr/share/nginx/html
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "100m"
+  
+  volumes:
+  - name: app-data
+    emptyDir: {}
