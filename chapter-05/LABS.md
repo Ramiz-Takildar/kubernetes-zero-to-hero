@@ -1,239 +1,149 @@
 # Chapter 5 Labs: Storage
 
-## Lab 5.1: Production Database Storage
+## Overview
+Learn PV/PVC lifecycle, storage classes, volume snapshots.
 
-### Objective
-Deploy production-grade database with backup and restore.
+---
 
-### Production YAML
+## Lab 5.1: Dynamic PVC Provisioning
+
+### Create PVC
+
+Create `dynamic-pvc.yaml`:
+
 ```yaml
-# production-database-storage.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: postgres-primary-pvc
-  namespace: production
+  name: dynamic-pvc
 spec:
-  storageClassName: fast-ssd
   accessModes:
   - ReadWriteOnce
   resources:
     requests:
-      storage: 100Gi
-  volumeMode: Filesystem
----
+      storage: 1Gi
+```
+
+### Create Pod Using PVC
+
+Create `pvc-pod.yaml`:
+
+```yaml
 apiVersion: v1
-kind: PersistentVolumeClaim
+kind: Pod
 metadata:
-  name: postgres-wal-pvc
-  namespace: production
+  name: pvc-test
 spec:
-  storageClassName: ultra-fast-ssd
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 50Gi
+  containers:
+  - name: app
+    image: busybox
+    command: ['sh', '-c', 'date > /data/timestamp.txt; cat /data/timestamp.txt; sleep 3600']
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: dynamic-pvc
+```
+
+### Verification
+
+- [ ] PVC created and bound
+- [ ] PV created automatically
+- [ ] Pod writes data
+- [ ] After delete and recreate, data persists
+
 ---
+
+## Lab 5.2: StatefulSet with Storage
+
+### Create StatefulSet
+
+Create `postgres-statefulset.yaml`:
+
+```yaml
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: postgres-primary
-  namespace: production
+  name: postgres
 spec:
-  serviceName: postgres-primary
-  replicas: 1
+  serviceName: postgres
+  replicas: 3
   selector:
     matchLabels:
-      app: postgres-primary
+      app: postgres
   template:
     metadata:
       labels:
-        app: postgres-primary
+        app: postgres
     spec:
       containers:
       - name: postgres
         image: postgres:15-alpine
+        env:
+        - name: POSTGRES_PASSWORD
+          value: password
         ports:
         - containerPort: 5432
-        env:
-        - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: db-credentials
-              key: username
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: db-credentials
-              key: password
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
-        - name: POSTGRES_INITDB_ARGS
-          value: "--auth-host=scram-sha-256"
         volumeMounts:
         - name: data
           mountPath: /var/lib/postgresql/data
-        - name: wal
-          mountPath: /var/lib/postgresql/wal
-        - name: backups
-          mountPath: /backups
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1000m"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-        livenessProbe:
-          exec:
-            command:
-            - pg_isready
-            - -U
-            - postgres
-          initialDelaySeconds: 30
-          periodSeconds: 10
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: postgres-primary-pvc
-      - name: wal
-        persistentVolumeClaim:
-          claimName: postgres-wal-pvc
-      - name: backups
-        persistentVolumeClaim:
-          claimName: postgres-backup-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 500Mi
 ```
 
----
+### Verification
 
-## Lab 5.2: Shared Storage with RWX
-
-### Objective
-Configure ReadWriteMany storage for shared data.
-
-### Production YAML
-```yaml
-# shared-storage-nfs.yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: shared-content
-  namespace: production
-spec:
-  storageClassName: nfs-client
-  accessModes:
-  - ReadWriteMany
-  resources:
-    requests:
-      storage: 500Gi
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: content-publisher
-  namespace: production
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: publisher
-  template:
-    metadata:
-      labels:
-        app: publisher
-    spec:
-      containers:
-      - name: publisher
-        image: nginx:alpine
-        volumeMounts:
-        - name: shared
-          mountPath: /usr/share/nginx/html
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-      volumes:
-      - name: shared
-        persistentVolumeClaim:
-          claimName: shared-content
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: content-consumers
-  namespace: production
-spec:
-  replicas: 5
-  selector:
-    matchLabels:
-      app: consumer
-  template:
-    metadata:
-      labels:
-        app: consumer
-    spec:
-      containers:
-      - name: consumer
-        image: nginx:alpine
-        volumeMounts:
-        - name: shared
-          mountPath: /usr/share/nginx/html
-          readOnly: true
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
-      volumes:
-      - name: shared
-        persistentVolumeClaim:
-          claimName: shared-content
-          readOnly: true
-```
+- [ ] Pods created in order (postgres-0, postgres-1, postgres-2)
+- [ ] PVCs created for each pod
+- [ ] Data persists after pod deletion
 
 ---
 
 ## Lab 5.3: Volume Snapshots
 
-### Objective
-Create and restore volume snapshots.
+Create volume snapshot for backup.
 
-### Production YAML
+Create `snapshot.yaml`:
+
 ```yaml
-# volume-snapshot.yaml
-apiVersion: snapshot.storage.k8s.io/v1
-kind: VolumeSnapshotClass
-metadata:
-  name: csi-snapclass
-driver: csi-driver
-deletionPolicy: Retain
----
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshot
 metadata:
-  name: postgres-snapshot
-  namespace: production
+  name: db-snapshot
 spec:
   volumeSnapshotClassName: csi-snapclass
   source:
-    persistentVolumeClaimName: postgres-primary-pvc
+    persistentVolumeClaimName: postgres-pvc
+```
+
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
+
+## Lab 5.4: StorageClass Configuration
+
+Create custom storage class.
+
+Create `storage-class.yaml`:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
 metadata:
-  name: postgres-restore
-  namespace: production
-spec:
-  storageClassName: fast-ssd
-  dataSource:
-    name: postgres-snapshot
-    kind: VolumeSnapshot
-    apiGroup: snapshot.storage.k8s.io
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Gi
+  name: fast-ssd
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  encrypted: "true"
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
 ```
 
 ---
@@ -242,6 +152,7 @@ spec:
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 5.1 | Production Database Storage | [ ] |
-| 5.2 | Shared RWX Storage | [ ] |
+| 5.1 | Dynamic PVC | [ ] |
+| 5.2 | StatefulSet Storage | [ ] |
 | 5.3 | Volume Snapshots | [ ] |
+| 5.4 | StorageClass | [ ] |

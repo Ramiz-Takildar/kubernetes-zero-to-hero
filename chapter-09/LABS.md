@@ -1,194 +1,141 @@
 # Chapter 9 Labs: Security
 
-## Lab 9.1: Production RBAC
+## Overview
+Learn RBAC, network policies, security contexts.
 
-### Objective
-Implement comprehensive RBAC for multi-team environment.
+---
 
-### Production YAML
+## Lab 9.1: RBAC Setup
+
+### Create ServiceAccount
+
+Create `developer-sa.yaml`:
+
 ```yaml
-# production-rbac.yaml
-apiVersion: v1
-kind:Namespace
-metadata:
-  name: team-alpha
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: team-beta
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: developer
-  namespace: team-alpha
----
+  namespace: default
+```
+
+### Create Role
+
+Create `pod-reader-role.yaml`:
+
+```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: developer-role
-  namespace: team-alpha
+  name: pod-reader
 rules:
 - apiGroups: [""]
-  resources: ["pods", "services", "configmaps", "secrets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "replicasets", "statefulsets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: [""]
-  resources: ["pods/log", "pods/exec"]
-  verbs: ["get", "list", "create"]
----
+  resources: ["pods"]
+  verbs: ["get", "list"]
+```
+
+### Create RoleBinding
+
+Create `developer-binding.yaml`:
+
+```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: developer-binding
-  namespace: team-alpha
 subjects:
 - kind: ServiceAccount
   name: developer
-  namespace: team-alpha
+  namespace: default
 roleRef:
   kind: Role
-  name: developer-role
+  name: pod-reader
   apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: readonly-clusterrole
-rules:
-- apiGroups: [""]
-  resources: ["nodes", "namespaces", "persistentvolumes"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["storage.k8s.io"]
-  resources: ["storageclasses"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: readonly-binding
-subjects:
-- kind: Group
-  name: readonly-users
-  apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: ClusterRole
-  name: readonly-clusterrole
-  apiGroup: rbac.authorization.k8s.io
+```
+
+### Test Authorization
+
+```bash
+kubectl get pods --as=system:serviceaccount:default:developer
 ```
 
 ---
 
 ## Lab 9.2: Pod Security Standards
 
-### Objective
-Enforce pod security policies namespace-wide.
+### Enable Restricted Policy
 
-### Production YAML
+Create `restricted-ns.yaml`:
+
 ```yaml
-# pod-security.yaml
 apiVersion: v1
 kind: Namespace
 metadata:
   name: restricted-ns
   labels:
     pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/enforce-version: latest
-    pod-security.kubernetes.io/audit: restricted
-    pod-security.kubernetes.io/warn: restricted
----
-apiVersion: apps/v1
-kind: Deployment
+```
+
+### Create Compliant Pod
+
+Create `secure-pod.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Pod
 metadata:
   name: secure-app
   namespace: restricted-ns
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: secure
-  template:
-    metadata:
-      labels:
-        app: secure
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-      - name: app
-        image: nginx:alpine
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
-        volumeMounts:
-        - name: tmp
-          mountPath: /tmp
-      volumes:
-      - name: tmp
-        emptyDir: {}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+  containers:
+  - name: app
+    image: nginx:alpine
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
 ```
 
 ---
 
 ## Lab 9.3: Network Policies
 
-### Objective
-Implement defense-in-depth network security.
+### Create Default Deny
 
-### Production YAML
+Create `default-deny.yaml`:
+
 ```yaml
-# network-security.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny
-  namespace: production
 spec:
   podSelector: {}
   policyTypes:
   - Ingress
   - Egress
----
+```
+
+### Create Allow Policy
+
+Create `allow-policy.yaml`:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-dns
-  namespace: production
-spec:
-  podSelector: {}
-  policyTypes:
-  - Egress
-  egress:
-  - to:
-    - namespaceSelector: {}
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: web-to-api
-  namespace: production
+  name: allow-web-to-api
 spec:
   podSelector:
     matchLabels:
@@ -202,7 +149,7 @@ spec:
           app: web
     ports:
     - protocol: TCP
-      port: 8080
+      port: 80
 ```
 
 ---
@@ -211,6 +158,6 @@ spec:
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 9.1 | Production RBAC | [ ] |
-| 9.2 | Pod Security Standards | [ ] |
+| 9.1 | RBAC | [ ] |
+| 9.2 | Pod Security | [ ] |
 | 9.3 | Network Policies | [ ] |

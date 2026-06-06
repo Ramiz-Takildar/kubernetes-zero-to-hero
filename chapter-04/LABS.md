@@ -1,194 +1,169 @@
 # Chapter 4 Labs: Services & Networking
 
-## Lab 4.1: Production Microservices Architecture
+## Overview
 
-### Objective
-Deploy a complete 3-tier application with proper service mesh.
+Learn Kubernetes networking, service discovery, Ingress routing, and network policies.
 
-### Production YAML
+---
+
+## Lab 4.1: Service Discovery
+
+Create ClusterIP, NodePort services and test DNS resolution.
+
+### Part A: Create Backend Deployment
+
+Create `backend-deployment.yaml`:
+
 ```yaml
-# microservices-architecture.yaml
----
-# Database Layer
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: postgres-db
-  namespace: production
-spec:
-  serviceName: postgres
-  replicas: 1
-  selector:
-    matchLabels:
-      app: postgres
-  template:
-    metadata:
-      labels:
-        app: postgres
-    spec:
-      containers:
-      - name: postgres
-        image: postgres:15-alpine
-        ports:
-        - containerPort: 5432
-        envFrom:
-        - secretRef:
-            name: db-credentials
-        volumeMounts:
-        - name: data
-          mountPath: /var/lib/postgresql/data
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: postgres-pvc
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres
-  namespace: production
-  labels:
-    app: postgres
-    tier: database
-spec:
-  clusterIP: None
-  selector:
-    app: postgres
-  ports:
-  - port: 5432
-    name: postgres
----
-# API Layer
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api-service
-  namespace: production
+  name: backend
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: api
-      tier: backend
+      app: backend
   template:
     metadata:
       labels:
-        app: api
-        tier: backend
+        app: backend
     spec:
       containers:
-      - name: api
-        image: nginx:alpine
+      - name: app
+        image: hashicorp/http-echo
+        args:
+          - "-text=Backend Response"
+          - "-listen=:8080"
         ports:
         - containerPort: 8080
-        env:
-        - name: DB_HOST
-          value: postgres.production.svc.cluster.local
-        - name: DB_PORT
-          value: "5432"
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8080
-          initialDelaySeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
----
+```
+
+Apply and verify pods are running.
+
+### Part B: Create ClusterIP Service
+
+Create `backend-service.yaml`:
+
+```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: api
-  namespace: production
-  labels:
-    app: api
-    tier: backend
+  name: backend
 spec:
   type: ClusterIP
   selector:
-    app: api
-    tier: backend
+    app: backend
   ports:
   - port: 80
     targetPort: 8080
+```
+
+Check endpoints and test connectivity from another pod.
+
+### Part C: Test DNS Resolution
+
+```bash
+kubectl run test --rm -i --restart=Never --image=busybox -- nslookup backend
+```
+
 ---
-# Frontend Layer
+
+## Lab 4.2: NodePort Service
+
+Create service accessible externally.
+
+### Create NodePort Service
+
+Create `nodeport-service.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-nodeport
+spec:
+  type: NodePort
+  selector:
+    app: backend
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30080
+```
+
+### Verification
+
+```bash
+kubectl get svc web-nodeport
+# Note the NodePort (30000-32767 range)
+
+# Access via node IP
+# curl http://<node-ip>:30080
+```
+
+---
+
+## Lab 4.3: Ingress Routing
+
+Configure HTTP routing with Ingress.
+
+### Step 1: Create Applications
+
+Create `web-v1.yaml`, `web-v2.yaml`, `api-deployment.yaml`:
+
+```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: web-frontend
-  namespace: production
+  name: web-v1
 spec:
   replicas: 2
   selector:
     matchLabels:
       app: web
-      tier: frontend
+      version: v1
   template:
     metadata:
       labels:
         app: web
-        tier: frontend
+        version: v1
     spec:
       containers:
       - name: nginx
         image: nginx:alpine
-        ports:
-        - containerPort: 80
-        env:
-        - name: API_URL
-          value: http://api.production.svc.cluster.local
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: web
-  namespace: production
-  labels:
-    app: web
-    tier: frontend
-spec:
-  type: ClusterIP
-  selector:
-    app: web
-    tier: frontend
-  ports:
-  - port: 80
-    targetPort: 80
----
-# Ingress Controller
+```
+
+### Step 2: Create Ingress
+
+Create `ingress-routing.yaml`:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: production-ingress
-  namespace: production
+  name: web-ingress
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-    - app.example.com
-    secretName: app-tls
   rules:
-  - host: app.example.com
+  - host: myapp.local
     http:
       paths:
+      - path: /v1
+        pathType: Prefix
+        backend:
+          service:
+            name: web-v1
+            port:
+              number: 80
+      - path: /v2
+        pathType: Prefix
+        backend:
+          service:
+            name: web-v2
+            port:
+              number: 80
       - path: /api
         pathType: Prefix
         backend:
@@ -196,167 +171,104 @@ spec:
             name: api
             port:
               number: 80
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: web
-            port:
-              number: 80
 ```
 
 ---
 
-## Lab 4.2: Advanced Network Policies
+## Lab 4.4: Network Policies
 
-### Objective
 Implement zero-trust network security.
 
-### Production YAML
+### Step 1: Create Test Pods
+
+Create `network-test-pods.yaml`:
+
 ```yaml
-# zero-trust-network.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  containers:
+  - name: app
+    image: busybox
+    command: ['sh', '-c', 'while true; do sleep 10; done']
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  containers:
+  - name: app
+    image: busybox
+    command: ['sh', '-c', 'while true; do sleep 10; done']
+```
+
+### Step 2: Create Default Deny
+
+Create `default-deny-netpol.yaml`:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-all
-  namespace: production
+  name: default-deny
 spec:
   podSelector: {}
   policyTypes:
   - Ingress
   - Egress
----
-# Allow External → Frontend
+```
+
+### Step 3: Allow Frontend to Backend
+
+Create `allow-frontend.yaml`:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-external-frontend
-  namespace: production
+  name: allow-frontend
 spec:
   podSelector:
     matchLabels:
-      app: web
-  policyTypes:
-  - Ingress
-  ingress:
-  - from: []
-    ports:
-    - protocol: TCP
-      port: 80
----
-# Allow Frontend → API
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-frontend-api
-  namespace: production
-spec:
-  podSelector:
-    matchLabels:
-      app: api
+      app: backend
   policyTypes:
   - Ingress
   ingress:
   - from:
     - podSelector:
         matchLabels:
-          app: web
-    ports:
-    - protocol: TCP
-      port: 8080
----
-# Allow API → Database
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-api-database
-  namespace: production
-spec:
-  podSelector:
-    matchLabels:
-      app: postgres
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: api
-    ports:
-    - protocol: TCP
-      port: 5432
----
-# Allow DNS Egress
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-dns
-  namespace: production
-spec:
-  podSelector: {}
-  policyTypes:
-  - Egress
-  egress:
-  - to:
-    - namespaceSelector: {}
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-    ports:
-    - protocol: UDP
-      port: 53
+          app: frontend
 ```
 
 ---
 
-## Lab 4.3: Service Mesh with mTLS
+## Lab 4.5: DNS Troubleshooting
 
-### Objective
-Configure mutual TLS between services.
+Debug and fix DNS issues.
 
-### Production YAML
-```yaml
-# mtls-services.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: secure-service
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: nlb
-    service.beta.kubernetes.io/aws-load-balancer-scheme: internal
-spec:
-  type: LoadBalancer
-  selector:
-    app: secure-app
-  ports:
-  - port: 443
-    targetPort: 8443
-  sessionAffinity: ClientIP
-  sessionAffinityConfig:
-    clientIP:
-      timeoutSeconds: 10800
----
-# ExternalName for external service
-apiVersion: v1
-kind: Service
-metadata:
-  name: external-api
-spec:
-  type: ExternalName
-  externalName: api.external-provider.com
----
-# Headless service for StatefulSet discovery
-apiVersion: v1
-kind: Service
-metadata:
-  name: cassandra-headless
-spec:
-  clusterIP: None
-  selector:
-    app: cassandra
-  ports:
-  - port: 9042
-    name: cql
+### Step 1: Check CoreDNS
+
+```bash
+kubectl get pods -n kube-system -l k8s-app=kube-dns
+```
+
+### Step 2: Check DNS Config
+
+```bash
+kubectl get configmap coredns -n kube-system -o yaml
+```
+
+### Step 3: Test DNS
+
+```bash
+kubectl run test --rm -i --restart=Never --image=busybox -- nslookup kubernetes.default
 ```
 
 ---
@@ -365,6 +277,8 @@ spec:
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 4.1 | Microservices Architecture | [ ] |
-| 4.2 | Zero-Trust Network Policies | [ ] |
-| 4.3 | mTLS Services | [ ] |
+| 4.1 | Service Discovery | [ ] |
+| 4.2 | NodePort Service | [ ] |
+| 4.3 | Ingress Routing | [ ] |
+| 4.4 | Network Policies | [ ] |
+| 4.5 | DNS Troubleshooting | [ ] |
