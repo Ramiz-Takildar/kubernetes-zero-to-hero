@@ -1,0 +1,37 @@
+# Lab 3.4: CronJob for Automated Backups
+# Demonstrates scheduled job execution
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: database-backup
+spec:
+  schedule: "*/5 * * * *"  # Every 5 minutes (for testing)
+  concurrencyPolicy: Forbid  # Don't start if previous still running
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 3600  # Clean up after 1 hour
+      template:
+        metadata:
+          labels:
+            job-type: backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backup
+            image: busybox
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting backup at $(date)"
+              echo "Backup process would run here..."
+              echo "Creating backup file..."
+              sleep 10
+              echo "Backup completed at $(date)"
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"

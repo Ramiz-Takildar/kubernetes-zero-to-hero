@@ -1,0 +1,14 @@
+# Lab 3.2: Service for Blue-Green Deployment
+# Toggle selector between blue and green versions
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    app: web
+    version: blue  # Change to green for switch
+  ports:
+  - port: 80
+    targetPort: 80
