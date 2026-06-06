@@ -1,409 +1,373 @@
 # Chapter 8 Labs: Scheduling & Scaling
 
-## Lab 8.1: Horizontal Pod Autoscaler
+## Lab 8.1: Production Horizontal Pod Autoscaler
 
 ### Objective
-Configure automatic pod scaling based on CPU.
+Configure production-grade autoscaling.
 
-### Prerequisites
-metrics-server must be installed.
-
-### Exercise
-```bash
-# 0. Verify metrics-server
-kubectl get pods -n kube-system | grep metrics
-
-# 1. Create deployment with resource requests
-cat <<EOF | kubectl apply -f -
+### Production YAML
+```yaml
+# production-hpa.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hpa-demo
+  name: scalable-api
+  namespace: production
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: hpa
+      app: scalable-api
   template:
     metadata:
       labels:
-        app: hpa
+        app: scalable-api
     spec:
       containers:
-      - name: app
+      - name: api
         image: nginx:alpine
         ports:
-        - containerPort: 80
+        - containerPort: 8080
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "100m"
           limits:
-            memory: "128Mi"
-            cpu: "200m"
-EOF
-
-# 2. Expose service
-kubectl expose deployment hpa-demo --port=80
-
-# 3. Create HPA
-kubectl autoscale deployment hpa-demo \
-  --cpu-percent=50 \
-  --min=1 \
-  --max=10
-
-# Or via YAML
-cat <<EOF | kubectl apply -f -
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scalable-api
+  namespace: production
+spec:
+  selector:
+    app: scalable-api
+  ports:
+  - port: 80
+    targetPort: 8080
+---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: hpa-demo
+  name: scalable-api-hpa
+  namespace: production
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: hpa-demo
-  minReplicas: 1
-  maxReplicas: 10
+    name: scalable-api
+  minReplicas: 3
+  maxReplicas: 50
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 50
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "100"
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 30
+      stabilizationWindowSeconds: 60
       policies:
       - type: Percent
         value: 100
         periodSeconds: 15
-EOF
-
-# 4. Check current status
-kubectl get hpa
-# Shows: TARGETS 0%/50%, MINPODS 1, MAXPODS 10
-
-# 5. Generate load
-kubectl run load-generator --image=busybox --restart=Never -- \
-  sh -c "while true; do wget -q -O- http://hpa-demo; done"
-
-# 6. Watch HPA in action
-kubectl get hpa -w
-# Shows CPU increasing, eventually replicas scale up
-
-# 7. Watch pods scale
-kubectl get pods -l app=hpa -w
-# Shows new pods being created
-
-# 8. Wait and verify scaling
-sleep 60
-kubectl get pods -l app=hpa
-# Shows multiple pods (up to 10)
-
-# 9. Stop load generator
-kubectl delete pod load-generator
-
-# 10. Watch scale down
-kubectl get hpa -w
-# Eventually scales back to 1
-
-# 11. Clean up
-kubectl delete deployment hpa-demo
-kubectl delete svc hpa-demo
-kubectl delete hpa hpa-demo
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Min
+---
+# Cluster Autoscaler PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: scalable-api-pdb
+  namespace: production
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: scalable-api
 ```
 
 ---
 
-## Lab 8.2: Node Affinity
+## Lab 8.2: Advanced Node Scheduling
 
 ### Objective
-Control which nodes pods run on.
+Implement complex scheduling rules.
 
-### Exercise
-```bash
-# 1. Check available node labels
-kubectl get nodes --show-labels
-
-# 2. Label a node (if multiple nodes available)
-kubectl label nodes <node-name> disktype=ssd
-
-# 3. Create pod with node selector (simple)
-cat <<EOF | kubectl apply -f -
+### Production YAML
+```yaml
+# advanced-scheduling.yaml
+# Node with taints
 apiVersion: v1
-kind: Pod
+kind: Node
 metadata:
-  name: node-selector
+  name: dedicated-node
+  labels:
+    node-type: dedicated
+    hardware: gpu
 spec:
-  nodeSelector:
-    kubernetes.io/os: linux
-  containers:
-  - name: app
-    image: busybox
-    command: ['sleep', '3600']
-EOF
-
-kubectl get pod node-selector -o wide
-
-# 4. Create pod with required node affinity
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: required-affinity
-spec:
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: kubernetes.io/os
-            operator: In
-            values:
-            - linux
-  containers:
-  - name: app
-    image: busybox
-    command: ['sleep', '3600']
-EOF
-
-kubectl get pod required-affinity -o wide
-
-# 5. Create pod with preferred node affinity
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: preferred-affinity
-spec:
-  affinity:
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 10
-        preference:
-          matchExpressions:
-          - key: disktype
-            operator: In
-            values:
-            - ssd
-  containers:
-  - name: app
-    image: busybox
-    command: ['sleep', '3600']
-EOF
-
-kubectl get pod preferred-affinity -o wide
-kubectl describe pod preferred-affinity | grep -A5 "Node-Selectors"
-
-# 6. Create pod with anti-affinity (spread across nodes)
-cat <<EOF | kubectl apply -f -
+  taints:
+  - key: dedicated
+    value: "true"
+    effect: NoSchedule
+  - key: nvidia.com/gpu
+    value: "true"
+    effect: NoSchedule
+---
+# Pod with advanced scheduling
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: spread-deployment
+  name: gpu-workload
+  namespace: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gpu-app
+  template:
+    metadata:
+      labels:
+        app: gpu-app
+    spec:
+      nodeSelector:
+        hardware: gpu
+      tolerations:
+      - key: dedicated
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - dedicated
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:
+                - us-east-1a
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - gpu-app
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: app
+        image: nvidia/cuda:latest
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+          requests:
+            nvidia.com/gpu: 1
+---
+# Topology spread for high availability
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ha-application
+  namespace: production
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: ha-app
+  template:
+    metadata:
+      labels:
+        app: ha-app
+    spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: ha-app
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: ha-app
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+```
+
+---
+
+## Lab 8.3: Priority and Preemption
+
+### Objective
+Configure pod priority classes.
+
+### Production YAML
+```yaml
+# priority-classes.yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: system-critical
+value: 1000000
+globalDefault: false
+description: "System critical pods"
+preemptionPolicy: PreemptLowerPriority
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: high-priority
+value: 100000
+globalDefault: false
+description: "High priority user workloads"
+preemptionPolicy: PreemptLowerPriority
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: standard
+value: 10000
+globalDefault: true
+description: "Default priority"
+preemptionPolicy: PreemptLowerPriority
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: low-priority
+value: 1000
+globalDefault: false
+description: "Low priority batch jobs"
+preemptionPolicy: Never
+---
+# Critical system pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: monitoring-agent
+  namespace: kube-system
+spec:
+  priorityClassName: system-critical
+  containers:
+  - name: agent
+    image: prom/node-exporter:latest
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+---
+# User workload with high priority
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: production
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: spread
+      app: payment
   template:
     metadata:
       labels:
-        app: spread
+        app: payment
     spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - spread
-              topologyKey: kubernetes.io/hostname
+      priorityClassName: high-priority
       containers:
-      - name: app
-        image: busybox
-        command: ['sleep', '3600']
-EOF
-
-# Check distribution
-kubectl get pods -l app=spread -o wide
-
-# 7. Clean up
-kubectl delete pod node-selector required-affinity preferred-affinity
-kubectl delete deployment spread-deployment
-kubectl label nodes <node-name> disktype-  # Remove label
-```
-
----
-
-## Lab 8.3: Taints and Tolerations
-
-### Objective
-Prevent pods from scheduling on specific nodes.
-
-### Note
-For single-node clusters (minikube, kind), this won't show full effect.
-
-### Exercise
-```bash
-# 1. Check existing taints
-kubectl describe nodes | grep Taints
-
-# 2. Add taint to node
-kubectl taint nodes <node-name> dedicated=special-user:NoSchedule
-
-# 3. Try to schedule pod (will stay Pending)
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: no-toleration
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sleep', '3600']
-EOF
-
-kubectl get pod no-toleration
-kubectl describe pod no-toleration | grep -A5 Events
-# Shows: node(s) had taint {dedicated=special-user: NoSchedule}
-
-# 4. Add toleration to pod
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: with-toleration
-spec:
-  tolerations:
-  - key: "dedicated"
-    operator: "Equal"
-    value: "special-user"
-    effect: "NoSchedule"
-  containers:
-  - name: app
-    image: busybox
-    command: ['sleep', '3600']
-EOF
-
-kubectl get pod with-toleration -o wide
-# Now it schedules
-
-# 5. Use taint for dedicated control plane
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: control-plane-pod
-spec:
-  tolerations:
-  - key: "node-role.kubernetes.io/control-plane"
-    operator: "Exists"
-    effect: "NoSchedule"
-  containers:
-  - name: app
-    image: busybox
-    command: ['sleep', '3600']
-EOF
-
-# 6. Remove taint
-kubectl taint nodes <node-name> dedicated=special-user:NoSchedule-
-
-# 7. Clean up
-kubectl delete pod no-toleration with-toleration control-plane-pod
-```
-
----
-
-## Lab 8.4: Pod Disruption Budget
-
-### Objective
-Ensure minimum availability during disruptions.
-
-### Exercise
-```bash
-# 1. Create deployment
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: critical-app
-spec:
-  replicas: 5
-  selector:
-    matchLabels:
-      app: critical
-  template:
-    metadata:
-      labels:
-        app: critical
-    spec:
-      containers:
-      - name: app
+      - name: api
         image: nginx:alpine
-EOF
-
-# 2. Wait for pods to be ready
-kubectl wait --for=condition=available --timeout=60s deployment/critical-app
-
-# 3. Create Pod Disruption Budget
-cat <<EOF | kubectl apply -f -
-apiVersion: policy/v1
-kind: PodDisruptionBudget
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+---
+# Batch job with low priority
+apiVersion: batch/v1
+kind: CronJob
 metadata:
-  name: critical-pdb
+  name: report-generator
+  namespace: production
 spec:
-  minAvailable: 3
-  selector:
-    matchLabels:
-      app: critical
-EOF
-
-# 4. Check PDB status
-kubectl get pdb
-# Shows: MIN AVAILABLE 3, ALLOWED DISRUPTIONS 2
-
-# 5. Try to drain node (if multi-node)
-# kubectl drain <node-name> --ignore-daemonsets
-# This will be blocked if it would violate PDB
-
-# 6. Scale down to test PDB
-kubectl scale deployment critical-app --replicas=2
-kubectl get pdb
-# Shows: ALLOWED DISRUPTIONS 0
-
-# 7. Alternative PDB using maxUnavailable
-cat <<EOF | kubectl apply -f -
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: critical-pdb-percent
-spec:
-  maxUnavailable: 30%
-  selector:
-    matchLabels:
-      app: critical
-EOF
-
-# 8. Clean up
-kubectl delete deployment critical-app
-kubectl delete pdb critical-pdb critical-pdb-percent
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          priorityClassName: low-priority
+          containers:
+          - name: generator
+            image: busybox
+            command: ['sh', '-c', 'echo Generating report; sleep 300']
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "500m"
+          restartPolicy: OnFailure
 ```
 
 ---
 
-## Completion Checklist for Chapter 8
+## Completion Checklist
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 8.1 | Horizontal Pod Autoscaler | [ ] |
-| 8.2 | Node affinity | [ ] |
-| 8.3 | Taints and tolerations | [ ] |
-| 8.4 | Pod Disruption Budget | [ ] |
+| 8.1 | Production HPA | [ ] |
+| 8.2 | Advanced Scheduling | [ ] |
+| 8.3 | Priority Classes | [ ] |

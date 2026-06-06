@@ -1,499 +1,370 @@
 # Chapter 4 Labs: Services & Networking
 
-## Lab 4.1: ClusterIP Service Discovery
+## Lab 4.1: Production Microservices Architecture
 
 ### Objective
-Create services and test internal communication.
+Deploy a complete 3-tier application with proper service mesh.
 
-### Exercise
-```bash
-# 1. Create backend deployment
-kubectl create deployment backend --image=hashicorp/http-echo \
-  --replicas=3 -- \
-  -text="Backend Response" -listen=:8080
-
-# 2. Expose as ClusterIP service
-kubectl expose deployment backend --port=80 --target-port=8080
-
-# 3. Verify service has endpoints
-kubectl get svc backend
-kubectl get endpoints backend
-
-# 4. Create client pod to test service discovery
-kubectl run client --image=busybox --restart=Never --rm -it -- \
-  wget -qO- http://backend
-
-# Output: "Backend Response"
-
-# 5. Test DNS resolution
-kubectl run client --image=busybox --restart=Never --rm -it -- \
-  nslookup backend
-
-# 6. Check environment variables injected
-kubectl run client --image=busybox --restart=Never --rm -it -- \
-  env | grep BACKEND
-
-# 7. Access via full DNS name
-kubectl run client --image=busybox --restart=Never --rm -it -- \
-  wget -qO- http://backend.default.svc.cluster.local
-
-# 8. Create in different namespace
-kubectl create namespace other-ns
-kubectl create deployment backend --image=hashicorp/http-echo \
-  --replicas=1 -n other-ns -- \
-  -text="Other NS Backend" -listen=:8080
-kubectl expose deployment backend --port=80 --target-port=8080 -n other-ns
-
-# 9. Access cross-namespace
-kubectl run client --image=busybox --restart=Never --rm -it -- \
-  wget -qO- http://backend.other-ns
-
-# 10. Clean up
-kubectl delete deployment backend
-kubectl delete service backend
-kubectl delete namespace other-ns
-```
-
-### Solution Verification
-```bash
-# Verify service works internally
-kubectl run verify --image=busybox --restart=Never --rm -it -- \
-  wget -qO- http://backend 2>/dev/null && echo "✓ Service accessible"
-```
-
+### Production YAML
+```yaml
+# microservices-architecture.yaml
 ---
-
-## Lab 4.2: NodePort Service
-
-### Objective
-Expose service externally via NodePort.
-
-### Exercise
-```bash
-# 1. Create deployment
-kubectl create deployment frontend --image=nginx --replicas=2
-
-# 2. Expose as NodePort
-kubectl expose deployment frontend --type=NodePort --port=80
-
-# 3. Get NodePort details
-kubectl get svc frontend
-# Note the NodePort (30000-32767)
-
-# 4. Get node IP
-kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}'
-
-# 5. Access via NodePort (replace <node-ip> and <node-port>)
-# curl http://<node-ip>:<node-port>
-
-# For testing, use port-forward
-kubectl port-forward svc/frontend 8080:80 &
-curl http://localhost:8080
-kill %1
-
-# 6. Specify NodePort (if available)
-cat <<EOF | kubectl apply -f -
+# Database Layer
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-db
+  namespace: production
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - secretRef:
+            name: db-credentials
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: nodeport-custom
+  name: postgres
+  namespace: production
+  labels:
+    app: postgres
+    tier: database
 spec:
-  type: NodePort
+  clusterIP: None
   selector:
-    app: frontend
+    app: postgres
   ports:
-  - port: 80
-    targetPort: 80
-    nodePort: 30080
-EOF
-
-# 7. Clean up
-kubectl delete deployment frontend
-kubectl delete service frontend nodeport-custom
-kubectl delete service frontend --ignore-not-found
-```
-
+  - port: 5432
+    name: postgres
 ---
-
-## Lab 4.3: Ingress Routing
-
-### Objective
-Configure HTTP routing with Ingress.
-
-### Prerequisites
-Ingress controller installed (nginx-ingress)
-
-### Exercise
-```bash
-# 1. Create applications
-cat <<EOF | kubectl apply -f -
+# API Layer
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: app-v1
+  name: api-service
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+      tier: backend
+  template:
+    metadata:
+      labels:
+        app: api
+        tier: backend
+    spec:
+      containers:
+      - name: api
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_HOST
+          value: postgres.production.svc.cluster.local
+        - name: DB_PORT
+          value: "5432"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: production
+  labels:
+    app: api
+    tier: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: api
+    tier: backend
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# Frontend Layer
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: production
 spec:
   replicas: 2
   selector:
     matchLabels:
       app: web
-      version: v1
+      tier: frontend
   template:
     metadata:
       labels:
         app: web
-        version: v1
+        tier: frontend
     spec:
       containers:
       - name: nginx
         image: nginx:alpine
         ports:
         - containerPort: 80
+        env:
+        - name: API_URL
+          value: http://api.production.svc.cluster.local
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: web-v1
+  name: web
+  namespace: production
+  labels:
+    app: web
+    tier: frontend
 spec:
+  type: ClusterIP
   selector:
     app: web
-    version: v1
+    tier: frontend
   ports:
   - port: 80
+    targetPort: 80
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-v2
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: web
-      version: v2
-  template:
-    metadata:
-      labels:
-        app: web
-        version: v2
-    spec:
-      containers:
-      - name: nginx
-        image: httpd:alpine
-        ports:
-        - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: web-v2
-spec:
-  selector:
-    app: web
-    version: v2
-  ports:
-  - port: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: api
-spec:
-  selector:
-    app: api
-  ports:
-  - port: 8080
-EOF
-
-# Create a simple API app
-kubectl create deployment api --image=hashicorp/http-echo \
-  --replicas=1 -- -text="API Response" -listen=:8080
-
-# 2. Create Ingress resource
-cat <<EOF | kubectl apply -f -
+# Ingress Controller
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: web-ingress
+  name: production-ingress
+  namespace: production
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
 spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - app.example.com
+    secretName: app-tls
   rules:
-  - host: myapp.local
+  - host: app.example.com
     http:
       paths:
-      - path: /v1
-        pathType: Prefix
-        backend:
-          service:
-            name: web-v1
-            port:
-              number: 80
-      - path: /v2
-        pathType: Prefix
-        backend:
-          service:
-            name: web-v2
-            port:
-              number: 80
       - path: /api
         pathType: Prefix
         backend:
           service:
             name: api
             port:
-              number: 8080
-EOF
-
-# 3. Check ingress status
-kubectl get ingress
-kubectl describe ingress web-ingress
-
-# 4. Test (requires /etc/hosts entry or DNS)
-# Or use port-forward to ingress controller
-kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80 2>/dev/null &
-# curl -H "Host: myapp.local" http://localhost:8080/v1
-# curl -H "Host: myapp.local" http://localhost:8080/v2
-# curl -H "Host: myapp.local" http://localhost:8080/api
-
-# 5. Clean up
-kubectl delete deployment app-v1 app-v2 api
-kubectl delete service web-v1 web-v2 api
-kubectl delete ingress web-ingress
+              number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web
+            port:
+              number: 80
 ```
 
 ---
 
-## Lab 4.4: Network Policy
+## Lab 4.2: Advanced Network Policies
 
 ### Objective
-Implement micro-segmentation with Network Policies.
+Implement zero-trust network security.
 
-### Prerequisites
-CNI plugin that supports NetworkPolicy (Calico, Cilium, etc.)
-
-### Exercise
-```bash
-# 1. Create namespace
-kubectl create namespace secure-app
-
-# 2. Create frontend, backend, and database
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: frontend
-  namespace: secure-app
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: frontend
-  template:
-    metadata:
-      labels:
-        app: frontend
-    spec:
-      containers:
-      - name: app
-        image: busybox
-        command: ['sh', '-c', 'echo Frontend; sleep 3600']
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend
-  namespace: secure-app
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: backend
-  template:
-    metadata:
-      labels:
-        app: backend
-    spec:
-      containers:
-      - name: app
-        image: busybox
-        command: ['sh', '-c', 'echo Backend; sleep 3600']
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: database
-  namespace: secure-app
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: database
-  template:
-    metadata:
-      labels:
-        app: database
-    spec:
-      containers:
-      - name: db
-        image: busybox
-        command: ['sh', '-c', 'echo Database; sleep 3600']
-EOF
-
-# 3. Test connectivity (everything can talk)
-kubectl exec -n secure-app deployment/frontend -- nc -zv backend 80 || echo "Can connect"
-
-# 4. Apply default deny policy (blocks all traffic)
-cat <<EOF | kubectl apply -f -napiVersion: networking.k8s.io/v1
+### Production YAML
+```yaml
+# zero-trust-network.yaml
+apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny
-  namespace: secure-app
+  name: default-deny-all
+  namespace: production
 spec:
   podSelector: {}
   policyTypes:
   - Ingress
   - Egress
-EOF
-
-# 5. Allow frontend to backend
-cat <<EOF | kubectl apply -f -
+---
+# Allow External → Frontend
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-frontend-to-backend
-  namespace: secure-app
+  name: allow-external-frontend
+  namespace: production
 spec:
   podSelector:
     matchLabels:
-      app: backend
+      app: web
   policyTypes:
   - Ingress
   ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: frontend
-EOF
-
-# 6. Allow backend to database
-cat <<EOF | kubectl apply -f -
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-backend-to-database
-  namespace: secure-app
-spec:
-  podSelector:
-    matchLabels:
-      app: database
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: backend
-EOF
-
-# 7. Test connectivity
-# Frontend to Backend: SUCCESS
-# Backend to Database: SUCCESS
-# Frontend to Database: DENIED (by default deny)
-# External to Frontend: DENIED (need additional policy)
-
-# 8. Allow ingress to frontend
-cat <<EOF | kubectl apply -f -
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-ingress-to-frontend
-  namespace: secure-app
-spec:
-  podSelector:
-    matchLabels:
-      app: frontend
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - namespaceSelector: {}
+  - from: []
     ports:
     - protocol: TCP
       port: 80
-EOF
-
-# 9. Clean up
-kubectl delete namespace secure-app
-```
-
-### Solution
-Network flow:
-```
-External → Frontend → Backend → Database
-                  ↘         ↗
-                 (database blocks direct)
+---
+# Allow Frontend → API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-api
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: web
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# Allow API → Database
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-database
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+# Allow DNS Egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
 ```
 
 ---
 
-## Lab 4.5: DNS Troubleshooting
+## Lab 4.3: Service Mesh with mTLS
 
 ### Objective
-Debug DNS resolution issues.
+Configure mutual TLS between services.
 
-### Exercise
-```bash
-# 1. Create test pods
-kubectl create deployment dns-test --image=busybox --replicas=2 -- sleep 3600
-
-# 2. Test DNS from pod
-kubectl exec deployment/dns-test -- nslookup kubernetes.default
-
-# 3. Test service DNS
-kubectl expose deployment dns-test --port=80
-kubectl exec deployment/dns-test -- nslookup dns-test
-
-# 4. Check CoreDNS pods
-kubectl get pods -n kube-system -l k8s-app=kube-dns
-
-# 5. Check CoreDNS config
-kubectl get configmap coredns -n kube-system -o yaml
-
-# 6. Enable CoreDNS logging (if needed)
-kubectl edit configmap coredns -n kube-system
-# Add: log
-# Restart CoreDNS: kubectl rollout restart deployment coredns -n kube-system
-
-# 7. Simulate DNS issue - create pod without DNS policy
-cat <<EOF | kubectl apply -f -
+### Production YAML
+```yaml
+# mtls-services.yaml
 apiVersion: v1
-kind: Pod
+kind: Service
 metadata:
-  name: no-dns
+  name: secure-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internal
 spec:
-  dnsPolicy: Default
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'echo Testing DNS; nslookup google.com || echo DNS failed; sleep 3600']
-EOF
-
-kubectl logs no-dns
-
-# 8. Clean up
-kubectl delete deployment dns-test
-kubectl delete service dns-test
-kubectl delete pod no-dns
+  type: LoadBalancer
+  selector:
+    app: secure-app
+  ports:
+  - port: 443
+    targetPort: 8443
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+---
+# ExternalName for external service
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-api
+spec:
+  type: ExternalName
+  externalName: api.external-provider.com
+---
+# Headless service for StatefulSet discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: cassandra-headless
+spec:
+  clusterIP: None
+  selector:
+    app: cassandra
+  ports:
+  - port: 9042
+    name: cql
 ```
 
 ---
 
-## Completion Checklist for Chapter 4
+## Completion Checklist
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 4.1 | ClusterIP service discovery | [ ] |
-| 4.2 | NodePort service | [ ] |
-| 4.3 | Ingress routing | [ ] |
-| 4.4 | Network policy | [ ] |
-| 4.5 | DNS troubleshooting | [ ] |
+| 4.1 | Microservices Architecture | [ ] |
+| 4.2 | Zero-Trust Network Policies | [ ] |
+| 4.3 | mTLS Services | [ ] |

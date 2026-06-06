@@ -1,229 +1,303 @@
 # Chapter 6 Labs: Configuration
 
-## Lab 6.1: ConfigMap Usage Patterns
+## Lab 6.1: Production ConfigMap Management
 
 ### Objective
-Use ConfigMaps in different ways.
+Manage application configuration with hot-reloading.
 
-### Exercise
-
-**Create ConfigMap:**
-```bash
-# Method 1: From literal values
-kubectl create configmap app-config \
-  --from-literal=database=postgres \
-  --from-literal=port=5432 \
-  --from-literal=log_level=info
-
-# Method 2: From file
-cat > app.properties <<EOF
-database.host=localhost
-database.port=5432
-cache.enabled=true
-EOF
-kubectl create configmap file-config --from-file=app.properties
-
-# Method 3: From env file
-cat > config.env <<EOF
-API_KEY=mykey
-API_URL=https://api.example.com
-EOF
-kubectl create configmap env-config --from-env-file=config.env
-
-# View all configmaps
-kubectl get configmaps
-kubectl get configmap app-config -o yaml
-```
-
-**Consume ConfigMap:**
-```bash
-# Pattern 1: Environment variables
-cat <<EOF | kubectl apply -f -
+### Production YAML
+```yaml
+# production-configmaps.yaml
 apiVersion: v1
-kind: Pod
+kind: ConfigMap
 metadata:
-  name: env-from-cm
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'echo DB=$DATABASE, PORT=$PORT; sleep 3600']
-    envFrom:
-    - configMapRef:
-        name: app-config
-EOF
-
-kubectl logs env-from-cm
-# Output: DB=postgres, PORT=5432
-
-# Pattern 2: Specific keys as env vars
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: specific-env
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'echo Log=$LOG_LEVEL; sleep 3600']
-    env:
-    - name: LOG_LEVEL
-      valueFrom:
-        configMapKeyRef:
-          name: app-config
-          key: log_level
-EOF
-
-kubectl logs specific-env
-
-# Pattern 3: Mount as files
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: file-mount
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'cat /config/app.properties; ls /config/; sleep 3600']
-    volumeMounts:
-    - name: config-vol
-      mountPath: /config
-  volumes:
-  - name: config-vol
-    configMap:
-      name: file-config
-EOF
-
-kubectl logs file-mount
-
-# Clean up
-kubectl delete pod env-from-cm specific-env file-mount
-kubectl delete configmap app-config file-config env-config
-rm app.properties config.env
-```
-
----
-
-## Lab 6.2: Secrets Management
-
-### Objective
-Create and consume secrets securely.
-
-### Exercise
-```bash
-# 1. Create secret imperatively
-kubectl create secret generic db-secret \
-  --from-literal=username=admin \
-  --from-literal=password='super-secret!123'
-
-# 2. Create secret from file
-echo -n 'my-api-key' > api-key.txt
-kubectl create secret generic api-secret --from-file=api-key=api-key.txt
-rm api-key.txt
-
-# 3. Create TLS secret
-# openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout tls.key -out tls.crt -subj "/CN=myapp.local"
-# kubectl create secret tls my-tls --cert=tls.crt --key=tls.key
-
-# 4. View secret (values are base64 encoded)
-kubectl get secret db-secret -o yaml
-
-# Decode manually
-echo 'YWRtaW4=' | base64 --decode  # admin
-
-# 5. Use as environment variables
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: secret-env
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'echo User=$DB_USER, Pass=${DB_PASS:0:3}***; sleep 3600']
-    env:
-    - name: DB_USER
-      valueFrom:
-        secretKeyRef:
-          name: db-secret
-          key: username
-    - name: DB_PASS
-      valueFrom:
-        secretKeyRef:
-          name: db-secret
-          key: password
-EOF
-
-kubectl logs secret-env
-
-# 6. Mount as files
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: secret-file
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'ls -la /secrets/; cat /secrets/username; sleep 3600']
-    volumeMounts:
-    - name: secret-vol
-      mountPath: /secrets
-  volumes:
-  - name: secret-vol
-    secret:
-      secretName: db-secret
-      defaultMode: 0400
-EOF
-
-kubectl logs secret-file
-
-# Verify file permissions (0400 = read-only)
-kubectl exec secret-file -- ls -la /secrets/
-
-# 7. Clean up
-kubectl delete pod secret-env secret-file
-kubectl delete secret db-secret api-secret
-```
-
----
-
-## Lab 6.3: Downward API
-
-### Objective
-Expose pod metadata to containers.
-
-### Exercise
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: downward-api-demo
-  labels:
-    app: myapp
-    version: v1
+  name: app-config
+  namespace: production
   annotations:
-    build: "123"
-    commit: "abc123"
+    configmap.reloader.stakater.com/auto: "true"
+data:
+  # Application settings
+  application.properties: |
+    server.port=8080
+    server.tomcat.max-threads=200
+    server.tomcat.min-spare-threads=10
+    spring.datasource.hikari.maximum-pool-size=20
+    spring.datasource.hikari.minimum-idle=5
+    spring.datasource.hikari.idle-timeout=300000
+    spring.datasource.hikari.max-lifetime=1200000
+    spring.datasource.hikari.connection-timeout=20000
+    logging.level.root=INFO
+    logging.level.com.company=DEBUG
+    
+  # Feature flags
+  features.json: |
+    {
+      "newUI": false,
+      "betaFeature": false,
+      "maintenanceMode": false,
+      "rateLimiting": true
+    }
+    
+  # Logback configuration
+  logback.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+          <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+      </appender>
+      <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+      </root>
+    </configuration>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: production
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+    
+    events {
+        worker_connections 4096;
+        use epoll;
+        multi_accept on;
+    }
+    
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        '$request_time $upstream_response_time';
+        
+        access_log /var/log/nginx/access.log main;
+        
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        
+        # Gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_types text/plain text/css text/xml text/javascript application/json;
+        
+        # Rate limiting
+        limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+        
+        server {
+            listen 80;
+            server_name _;
+            
+            location / {
+                limit_req zone=api burst=20 nodelay;
+                proxy_pass http://backend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-consumer
+  namespace: production
 spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      containers:
+      - name: app
+        image: nginx:alpine
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: app-config
+          mountPath: /config
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+      volumes:
+      - name: config
+        configMap:
+          name: nginx-config
+      - name: app-config
+        configMap:
+          name: app-config
+```
+
+---
+
+## Lab 6.2: Secret Management with Encryption
+
+### Objective
+Secure secret management with rotation.
+
+### Production YAML
+```yaml
+# production-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-credentials
+  namespace: production
+  annotations:
+    secret.reloader.stakater.com/auto: "true"
+type: Opaque
+stringData:
+  host: postgres.production.svc.cluster.local
+  port: "5432"
+  database: appdb
+  username: appuser
+  password: "ChangeMe123!@#"
+  url: "postgresql://appuser:ChangeMe123!@#@postgres.production.svc.cluster.local:5432/appdb"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-keys
+  namespace: production
+type: Opaque
+stringData:
+  external-api-key: "sk_live_1234567890abcdef"
+  internal-api-key: "sk_internal_0987654321fedcba"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tls-certificate
+  namespace: production
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUM=
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2ZndCQW9=
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: registry-credentials
+  namespace: production
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlLmNvbSI6eyJ1c2VybmFtZSI6InVzZXIiLCJwYXNzd29yZCI6InBhc3MiLCJhdXRoIjoiZFhObGNqcHdZWE56Y2pwMWMyVnlPblZ6WlhJNmMyVmpjbVYwTVRJI319
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secret-consumer
+  namespace: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: secret-app
+  template:
+    metadata:
+      labels:
+        app: secret-app
+    spec:
+      imagePullSecrets:
+      - name: registry-credentials
+      containers:
+      - name: app
+        image: private-registry.example.com/app:latest
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: url
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys
+              key: external-api-key
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: tls
+        secret:
+          secretName: tls-certificate
+          defaultMode: 0400
+```
+
+---
+
+## Lab 6.3: Downward API for Pod Metadata
+
+### Objective
+Expose pod information to applications.
+
+### Production YAML
+```yaml
+# downward-api-usage.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: metadata-aware-app
+  labels:
+    app: web
+    version: v1.0.0
+    tier: frontend
+  annotations:
+    build.id: "12345"
+    commit.sha: "abc123def456"
+    deploy.time: "2024-01-01T00:00:00Z"
+spec:
+  serviceAccountName: app-sa
   containers:
   - name: app
     image: busybox
-    command: ['sh', '-c', '
-      echo "=== Environment ===" &&
-      env | grep -E "^(POD_|NODE_|NAMESPACE)" &&
-      echo "" &&
-      echo "=== Mounted Files ===" &&
-      cat /podinfo/labels &&
-      cat /podinfo/annotations &&
+    command:
+    - sh
+    - -c
+    - |
+      echo "=== Pod Identity ==="
+      echo "Name: $POD_NAME"
+      echo "Namespace: $POD_NAMESPACE"
+      echo "Node: $NODE_NAME"
+      echo "Pod IP: $POD_IP"
+      echo "Service Account: $POD_SERVICE_ACCOUNT"
+      echo ""
+      echo "=== Resource Limits ==="
+      echo "CPU Limit: $CPU_LIMIT"
+      echo "Memory Limit: $MEMORY_LIMIT"
+      echo "CPU Request: $CPU_REQUEST"
+      echo "Memory Request: $MEMORY_REQUEST"
+      echo ""
+      echo "=== Mounted Files ==="
+      cat /etc/podinfo/labels
+      cat /etc/podinfo/annotations
+      echo ""
+      echo "=== Owner Reference ==="
+      cat /etc/podinfo/owner
       sleep 3600
-    ']
     env:
     - name: POD_NAME
       valueFrom:
@@ -241,19 +315,40 @@ spec:
       valueFrom:
         fieldRef:
           fieldPath: spec.nodeName
+    - name: POD_SERVICE_ACCOUNT
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.serviceAccountName
     - name: CPU_LIMIT
       valueFrom:
         resourceFieldRef:
           containerName: app
           resource: limits.cpu
-    - name: MEM_REQUEST
+    - name: MEMORY_LIMIT
+      valueFrom:
+        resourceFieldRef:
+          containerName: app
+          resource: limits.memory
+    - name: CPU_REQUEST
+      valueFrom:
+        resourceFieldRef:
+          containerName: app
+          resource: requests.cpu
+    - name: MEMORY_REQUEST
       valueFrom:
         resourceFieldRef:
           containerName: app
           resource: requests.memory
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
     volumeMounts:
     - name: podinfo
-      mountPath: /podinfo
+      mountPath: /etc/podinfo
   volumes:
   - name: podinfo
     downwardAPI:
@@ -267,84 +362,20 @@ spec:
       - path: name
         fieldRef:
           fieldPath: metadata.name
-EOF
-
-kubectl logs downward-api-demo
-
-# Clean up
-kubectl delete pod downward-api-demo
+      - path: namespace
+        fieldRef:
+          fieldPath: metadata.namespace
+      - path: owner
+        fieldRef:
+          fieldPath: metadata.ownerReferences
 ```
 
 ---
 
-## Lab 6.4: Projected Volumes
-
-### Objective
-Combine multiple sources into single volume.
-
-### Exercise
-```bash
-# 1. Create prerequisite secrets and configmaps
-kubectl create secret generic app-secret \
-  --from-literal=token=abc123
-
-kubectl create configmap app-config \
-  --from-literal=config=value
-
-# 2. Create service account (default exists)
-
-# 3. Use projected volume
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: projected-demo
-spec:
-  containers:
-  - name: app
-    image: busybox
-    command: ['sh', '-c', 'ls -la /projected/; cat /projected/*; sleep 3600']
-    volumeMounts:
-    - name: all-in-one
-      mountPath: /projected
-  volumes:
-  - name: all-in-one
-    projected:
-      sources:
-      - secret:
-          name: app-secret
-          items:
-          - key: token
-            path: app-token
-      - configMap:
-          name: app-config
-          items:
-          - key: config
-            path: app-config
-      - downwardAPI:
-          items:
-          - path: podname
-            fieldRef:
-              fieldPath: metadata.name
-      - serviceAccountToken:
-          path: token
-          expirationSeconds: 3600
-EOF
-kubectl logs projected-demo
-
-# Clean up
-kubectl delete pod projected-demo
-kubectl delete secret app-secret
-kubectl delete configmap app-config
-```
-
----
-
-## Completion Checklist for Chapter 6
+## Completion Checklist
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 6.1 | ConfigMap usage patterns | [ ] |
-| 6.2 | Secrets management | [ ] |
+| 6.1 | Production ConfigMaps | [ ] |
+| 6.2 | Secret Management | [ ] |
 | 6.3 | Downward API | [ ] |
-| 6.4 | Projected volumes | [ ] |

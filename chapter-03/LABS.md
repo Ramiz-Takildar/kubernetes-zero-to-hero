@@ -1,562 +1,634 @@
 # Chapter 3 Labs: Workloads & Controllers
 
-## Lab 3.1: Create and Scale a Deployment
+## Lab 3.1: Production Deployment with Rolling Update
 
 ### Objective
-Practice deployment creation and scaling.
+Deploy a production-grade application with proper update strategy.
 
-### Exercise
-```bash
-# 1. Create deployment imperatively
-kubectl create deployment web --image=nginx:alpine --replicas=3
-
-# 2. Verify
-kubectl get deployment web
-kubectl get pods -l app=web
-
-# 3. Scale up
-kubectl scale deployment web --replicas=10
-
-# 4. Watch scaling in action
-kubectl get pods -l app=web -w
-# Press Ctrl+C after seeing 10 pods
-
-# 5. Scale down
-kubectl scale deployment web --replicas=2
-kubectl get pods -l app=web
-
-# 6. Get deployment details
-kubectl describe deployment web
-
-# 7. Clean up
-kubectl delete deployment web
-```
-
-### Solution Verification
-```bash
-# Check all replicas are running
-echo "Checking replicas..."
-REPLICAS=$(kubectl get deployment web -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-if [ "$REPLICAS" = "2" ]; then
-  echo "✓ Deployment has 2 replicas"
-else
-  echo "✗ Expected 2 replicas, got $REPLICAS"
-fi
-```
-
----
-
-## Lab 3.2: Rolling Update and Rollback
-
-### Objective
-Perform zero-downtime deployment and rollback.
-
-### Exercise
-```bash
-# 1. Create initial deployment
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rolling-demo
-spec:
-  replicas: 5
-  selector:
-    matchLabels:
-      app: rolling
-  template:
-    metadata:
-      labels:
-        app: rolling
-        version: v1
-    spec:
-      containers:
-      - name: nginx
-        image: nginx:1.24-alpine
-        ports:
-        - containerPort: 80
-EOF
-
-# 2. Verify initial deployment
-kubectl get deployment rolling-demo
-kubectl get pods -l app=rolling
-
-# 3. Trigger rolling update (change version)
-kubectl set image deployment/rolling-demo nginx=nginx:1.25-alpine --record
-
-# 4. Watch rollout progress
-kubectl rollout status deployment/rolling-demo
-
-# 5. Check rollout history
-kubectl rollout history deployment/rolling-demo
-
-# 6. Verify new version
-kubectl get pods -l app=rolling -o jsonpath='{.items[0].spec.containers[0].image}'
-
-# 7. Rollback to previous version
-kubectl rollout undo deployment/rolling-demo
-
-# 8. Verify rollback
-kubectl rollout status deployment/rolling-demo
-kubectl get pods -l app=rolling -o jsonpath='{.items[0].spec.containers[0].image}'
-
-# 9. Check revision history
-kubectl rollout history deployment/rolling-demo
-
-# 10. Rollback to specific revision
-kubectl rollout undo deployment/rolling-demo --to-revision=2
-
-# 11. Clean up
-kubectl delete deployment rolling-demo
-```
-
-### Expected Behavior
-- Update: Pods replaced one by one, never below 4 available
-- Image changes from 1.24 to 1.25
-- Rollback: Returns to previous image
-
----
-
-## Lab 3.3: Deployment Strategy Comparison
-
-### Objective
-Compare Recreate vs RollingUpdate strategies.
-
-### Exercise
-
-**RollingUpdate (default):**
+### Production YAML
 ```yaml
+# production-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rolling-strategy
+  name: api-service
+  namespace: production
+  labels:
+    app: api
+    tier: backend
+    version: v1.0.0
+  annotations:
+    deployment.kubernetes.io/revision: "1"
 spec:
   replicas: 5
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 1
       maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
-      app: rolling
+      app: api
+      tier: backend
   template:
     metadata:
       labels:
-        app: rolling
+        app: api
+        tier: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: api-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - api
+              topologyKey: kubernetes.io/hostname
+      
+      terminationGracePeriodSeconds: 60
+      
       containers:
-      - name: app
-        image: nginx:1.24-alpine
+      - name: api
+        image: nginx:1.25-alpine
+        imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 80
-```
-
-```bash
-kubectl apply -f rolling-deployment.yaml
-kubectl set image deployment/rolling-strategy app=nginx:1.25-alpine
-kubectl get pods -w
-# Shows pods being replaced gradually
-kubectl delete deployment rolling-strategy
-```
-
-**Recreate:**
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: recreate-strategy
-spec:
-  replicas: 5
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: recreate
-  template:
-    metadata:
-      labels:
-        app: recreate
-    spec:
-      containers:
-      - name: app
-        image: nginx:1.24-alpine
-        ports:
-        - containerPort: 80
-```
-
-```bash
-kubectl apply -f recreate-deployment.yaml
-kubectl set image deployment/recreate-strategy app=nginx:1.25-alpine
-kubectl get pods -w
-# Shows all pods terminating, then all new pods starting
-kubectl delete deployment recreate-strategy
-```
-
-### Solution Key Differences
-| Strategy | Behavior | Downtime |
-|----------|----------|----------|
-| RollingUpdate | Replace gradually | Zero |
-| Recreate | Kill all, then create | Yes |
-
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /var/cache/nginx
+        - name: run
+          mountPath: /var/run
+        - name: config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - "nginx -s quit; sleep 30"
+      
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: api-config
 ---
-
-## Lab 3.4: Canary Deployment
-
-### Objective
-Implement canary deployment pattern.
-
-### Exercise
-```bash
-# 1. Deploy stable version (90% traffic)
-kubectl create deployment web-stable --image=nginx:1.24 --replicas=9
-
-# 2. Deploy canary version (10% traffic)
-kubectl create deployment web-canary --image=nginx:1.25 --replicas=1
-
-# 3. Create service that routes to both (via common label)
-# Add common label to stable
-cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: production
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+    
+    events {
+        worker_connections 1024;
+    }
+    
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+        
+        access_log /var/log/nginx/access.log main;
+        
+        server {
+            listen 8080;
+            server_name localhost;
+            
+            location / {
+                root /usr/share/nginx/html;
+                index index.html;
+            }
+            
+            location /healthz {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+            
+            location /ready {
+                access_log off;
+                return 200 "ready\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-sa
+  namespace: production
+automountServiceAccountToken: false
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: web
+  name: api-service
+  namespace: production
+  labels:
+    app: api
+    tier: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: api
+    tier: backend
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  sessionAffinity: None
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-pdb
+  namespace: production
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: api
+      tier: backend
+```
+
+### Verification
+```bash
+# Apply deployment
+kubectl apply -f production-deployment.yaml
+
+# Check rolling update in progress
+kubectl rollout status deployment/api-service -n production
+
+# Current revision
+kubectl rollout history deployment/api-service -n production
+
+# Pods distribution across nodes
+kubectl get pods -n production -o wide -l app=api
+
+# PDB status
+kubectl get pdb -n production
+
+# Update to new version
+kubectl set image deployment/api-service api=nginx:1.26-alpine -n production
+
+# Watch rollout
+kubectl get pods -n production -w
+
+# Rollback if needed
+kubectl rollout undo deployment/api-service -n production
+```
+
+---
+
+## Lab 3.2: Blue-Green Deployment
+
+### Objective
+Implement zero-downtime blue-green deployment strategy.
+
+### Production YAML
+```yaml
+# blue-green-deployment.yaml
+# Blue (Current) Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-blue
+  labels:
+    app: web
+    version: blue
+    track: stable
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: web
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: web
+        version: blue
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.24-alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+---
+# Green (New) Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-green
+  labels:
+    app: web
+    version: green
+    track: canary
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: web
+      version: green
+  template:
+    metadata:
+      labels:
+        app: web
+        version: green
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+---
+# Preview Service (for testing green)
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-preview
 spec:
   selector:
     app: web
+    version: green
   ports:
   - port: 80
+    targetPort: 80
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web-stable
-spec:
-  replicas: 9
-  selector:
-    matchLabels:
-      app: web
-      version: stable
-  template:
-    metadata:
-      labels:
-        app: web
-        version: stable
-    spec:
-      containers:
-      - name: nginx
-        image: nginx:1.24
-        ports:
-        - containerPort: 80
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web-canary
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: web
-      version: canary
-  template:
-    metadata:
-      labels:
-        app: web
-        version: canary
-    spec:
-      containers:
-      - name: nginx
-        image: nginx:1.25
-        ports:
-        - containerPort: 80
-EOF
-
-# 4. Test accessing the service
-kubectl run test --rm -i --restart=Never --image=busybox -- wget -qO- http://web
-
-# 5. Increase canary traffic to 50%
-kubectl scale deployment web-stable --replicas=5
-kubectl scale deployment web-canary --replicas=5
-
-# 6. Monitor - test multiple times
-for i in {1..10}; do
-  kubectl run test$i --rm -i --restart=Never --image=busybox -- wget -qO- http://web 2>/dev/null | head -1
-done
-
-# 7. Full rollout (100% on canary)
-kubectl scale deployment web-stable --replicas=0
-kubectl scale deployment web-canary --replicas=10
-
-# 8. Clean up
-kubectl delete deployment web-stable web-canary
-kubectl delete service web
-```
-
-### Solution
-Canary deployment gradually shifts traffic to new version:
-- 90/10 → 50/50 → 0/100
-- Can rollback if issues detected at any stage
-
----
-
-## Lab 3.5: DaemonSet Lab
-
-### Objective
-Deploy a pod on every node.
-
-### Exercise
-```bash
-# 1. Create DaemonSet
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: node-logger
-spec:
-  selector:
-    matchLabels:
-      app: logger
-  template:
-    metadata:
-      labels:
-        app: logger
-    spec:
-      containers:
-      - name: logger
-        image: busybox
-        command: ['sh', '-c', 'while true; do date; sleep 10; done']
-        resources:
-          requests:
-            memory: "16Mi"
-            cpu: "10m"
-EOF
-
-# 2. Verify - one pod per node
-NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
-POD_COUNT=$(kubectl get pods -l app=logger --no-headers | wc -l)
-echo "Nodes: $NODE_COUNT, Pods: $POD_COUNT"
-
-# 3. Check pod distribution
-kubectl get pods -l app=logger -o wide
-
-# 4. Add taints to control-plane, add toleration if needed
-kubectl describe ds node-logger | grep -A20 "Node-Selectors"
-
-# 5. Clean up
-kubectl delete daemonset node-logger
-```
-
-### Solution
-- DaemonSet creates exactly 1 pod per node
-- Automatically adds new pods when nodes join
-- Removes pods when nodes leave
-
----
-
-## Lab 3.6: Jobs and CronJobs
-
-### Objective
-Run batch jobs and scheduled tasks.
-
-### Exercise
-
-**One-time Job:**
-```bash
-# Create job
-cat <<EOF | kubectl apply -f -
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: data-process
-spec:
-  template:
-    spec:
-      containers:
-      - name: processor
-        image: busybox
-        command: ['sh', '-c', 'echo Processing...; sleep 10; echo Done!']
-      restartPolicy: OnFailure
-EOF
-
-# Watch completion
-kubectl get jobs -w
-kubectl logs job/data-process
-
-# Check status
-kubectl get job data-process -o jsonpath='{.status.succeeded}'
-
-# Clean up
-kubectl delete job data-process
-```
-
-**Parallel Job:**
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: parallel-batch
-spec:
-  completions: 10
-  parallelism: 3
-  template:
-    spec:
-      containers:
-      - name: worker
-        image: busybox
-        command: ['sh', '-c', 'echo Worker $(hostname) started; sleep 5; echo Done']
-      restartPolicy: OnFailure
-EOF
-
-# Watch parallel execution
-kubectl get pods -l job-name=parallel-batch -w
-
-# Verify all completed
-kubectl get job parallel-batch
-kubectl logs -l job-name=parallel-batch
-
-kubectl delete job parallel-batch
-```
-
-**CronJob:**
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: hello-cron
-spec:
-  schedule: "*/1 * * * *"
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-          - name: hello
-            image: busybox
-            command: ['sh', '-c', 'echo Hello from CronJob at $(date)']
-          restartPolicy: OnFailure
-EOF
-
-# Watch cronjob create jobs
-sleep 65
-kubectl get jobs
-kubectl logs -l job-name=hello-cron
-
-# View cronjob
-kubectl get cronjobs
-kubectl delete cronjob hello-cron
-```
-
----
-
-## Lab 3.7: StatefulSet Lab
-
-### Objective
-Deploy stateful application with persistent storage.
-
-### Exercise
-```bash
-# 1. Create headless service
-cat <<EOF | kubectl apply -f -
+# Production Service (switches between blue/green)
 apiVersion: v1
 kind: Service
 metadata:
-  name: postgres-headless
+  name: app-production
 spec:
+  selector:
+    app: web
+    version: blue  # Switch to green when ready
+  ports:
+  - port: 80
+    targetPort: 80
+```
+
+### Switch Traffic to Green
+```bash
+# Apply both deployments
+kubectl apply -f blue-green-deployment.yaml
+
+# Test blue (production)
+kubectl run test --rm -i --restart=Never --image=busybox -- wget -qO- http://app-production
+
+# Test green (preview)
+kubectl run test --rm -i --restart=Never --image=busybox -- wget -qO- http://app-preview
+
+# Switch production to green
+kubectl patch service app-production -p '{"spec":{"selector":{"version":"green"}}}'
+
+# Verify traffic switch
+kubectl run test --rm -i --restart=Never --image=busybox -- wget -qO- http://app-production
+
+# Rollback to blue if needed
+kubectl patch service app-production -p '{"spec":{"selector":{"version":"blue"}}}'
+```
+
+---
+
+## Lab 3.3: Stateful Application with StatefulSet
+
+### Objective
+Deploy a production Redis cluster using StatefulSet.
+
+### Production YAML
+```yaml
+# redis-statefulset.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  labels:
+    app: redis
+spec:
+  ports:
+  - port: 6379
+    name: redis
   clusterIP: None
   selector:
-    app: postgres
-  ports:
-  - port: 5432
-EOF
-
-# 2. Create StatefulSet
-cat <<EOF | kubectl apply -f -
+    app: redis
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: postgres
+  name: redis
+  labels:
+    app: redis
 spec:
-  serviceName: postgres-headless
-  replicas: 2
+  serviceName: redis-headless
+  replicas: 3
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
-      app: postgres
+      app: redis
   template:
     metadata:
       labels:
-        app: postgres
+        app: redis
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
-      - name: postgres
-        image: postgres:15-alpine
-        env:
-        - name: POSTGRES_PASSWORD
-          value: password123
+      - name: redis
+        image: redis:7-alpine
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
         ports:
-        - containerPort: 5432
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
         volumeMounts:
         - name: data
-          mountPath: /var/lib/postgresql/data
+          mountPath: /data
+        - name: config
+          mountPath: /etc/redis
+      volumes:
+      - name: config
+        configMap:
+          name: redis-config
   volumeClaimTemplates:
   - metadata:
       name: data
     spec:
       accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
       resources:
         requests:
-          storage: 500Mi
-EOF
-
-# 3. Watch ordered pod creation (postgres-0 before postgres-1)
-kubectl get pods -l app=postgres -w
-
-# 4. Verify PVCs created for each pod
-kubectl get pvc
-# Shows: data-postgres-0, data-postgres-1
-
-# 5. Test pod identity
-echo "Pod hostnames:"
-kubectl exec postgres-0 -- hostname
-kubectl exec postgres-1 -- hostname
-
-# 6. Each pod has stable network identity
-# postgres-0.postgres-headless.default.svc.cluster.local
-
-# 7. Delete pod and verify it comes back with same identity
-kubectl delete pod postgres-0
-kubectl get pods -l app=postgres -w
-# pod-0 comes back, reattaches to same PVC
-
-# 8. Scale up (ordered creation)
-kubectl scale sts postgres --replicas=3
-kubectl get pods -l app=postgres -w
-# postgres-2 starts only after postgres-0 and postgres-1 are ready
-
-# 9. Clean up (reverse order deletion)
-kubectl delete sts postgres
-kubectl delete service postgres-headless
-kubectl delete pvc data-postgres-0 data-postgres-1 data-postgres-2
+          storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+data:
+  redis.conf: |
+    port 6379
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    save 900 1
+    save 300 10
+    save 60 10000
+    maxmemory 256mb
+    maxmemory-policy allkeys-lru
 ```
 
-### Solution Key Points
-- Ordered pod creation: pod-0, then pod-1, then pod-2
-- Each pod has unique PVC and identity
-- Stable network identity with headless service
-- Ordered deletion: pod-2, then pod-1, then pod-0
+### Verification
+```bash
+kubectl apply -f redis-statefulset.yaml
+
+# Check ordered pod creation
+kubectl get pods -l app=redis -w
+# redis-0, then redis-1, then redis-2
+
+# Check PVCs created
+kubectl get pvc
+
+# Each pod gets its own PVC
+kubectl get pvc -l app=redis
+
+# Test Redis
+kubectl exec redis-0 -- redis-cli ping
+kubectl exec redis-1 -- redis-cli ping
+
+# Write data to redis-0
+kubectl exec redis-0 -- redis-cli set testkey "hello"
+
+# Read from redis-1
+kubectl exec redis-1 -- redis-cli get testkey
+```
 
 ---
 
-## Completion Checklist for Chapter 3
+## Lab 3.4: CronJob for Database Backup
+
+### Objective
+Schedule automated database backups.
+
+### Production YAML
+```yaml
+# database-backup-cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: database-backup
+  namespace: production
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: database-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backup
+            image: postgres:15-alpine
+            env:
+            - name: PGHOST
+              value: postgres.production.svc.cluster.local
+            - name: PGDATABASE
+              value: appdb
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            command:
+            - /bin/sh
+            - -c
+            - |
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              BACKUP_FILE="/backup/${PGDATABASE}_${TIMESTAMP}.sql.gz"
+              
+              echo "Starting backup at $(date)"
+              echo "Backing up database: ${PGDATABASE}"
+              
+              pg_dump --verbose --format=plain \
+                | gzip > "${BACKUP_FILE}"
+              
+              if [ $? -eq 0 ]; then
+                echo "Backup successful: ${BACKUP_FILE}"
+                ls -lh "${BACKUP_FILE}"
+                
+                # Keep only last 7 backups
+                cd /backup && ls -t *.sql.gz | tail -n +8 | xargs -r rm -v
+                
+                # Upload to S3 (if configured)
+                if [ -n "$S3_BUCKET" ]; then
+                  echo "Uploading to S3..."
+                  aws s3 cp "${BACKUP_FILE}" "s3://${S3_BUCKET}/backups/"
+                fi
+              else
+                echo "Backup failed!"
+                exit 1
+              fi
+            volumeMounts:
+            - name: backup
+              mountPath: /backup
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "200m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 999
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: false
+          volumes:
+          - name: backup
+            persistentVolumeClaim:
+              claimName: backup-pvc
+```
+
+---
+
+## Completion Checklist
 
 | Lab | Description | Status |
 |-----|-------------|--------|
-| 3.1 | Create and scale deployment | [ ] |
-| 3.2 | Rolling update and rollback | [ ] |
-| 3.3 | Deployment strategies | [ ] |
-| 3.4 | Canary deployment | [ ] |
-| 3.5 | DaemonSet | [ ] |
-| 3.6 | Jobs and CronJobs | [ ] |
-| 3.7 | StatefulSet | [ ] |
+| 3.1 | Production Deployment | [ ] |
+| 3.2 | Blue-Green Deployment | [ ] |
+| 3.3 | StatefulSet Redis | [ ] |
+| 3.4 | Backup CronJob | [ ] |
